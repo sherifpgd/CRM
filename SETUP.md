@@ -133,6 +133,37 @@ How it behaves:
 
 ## Everyday use
 
+### Your three companies
+The CRM is set up with **Gotrack Tech Services FZC**, **Gotrack Tax Consultancy** and **Netwave Computer Systems**.
+- **Switch view:** the switcher at the top (top-left on a computer, the company name at the top on a phone) shows **All companies** or just one. Home, Tasks, Clients, Follow-ups, Invoices, Bills and Excel exports then show only that company.
+- **Tagging:** every new client, task, invoice and bill gets a company. Pick it with the coloured buttons at the top of each form. It defaults to the company you're viewing.
+  When you view All companies, each item shows a small coloured label (Gotrack Tech / Gotrack Tax / Netwave).
+- **Payment reminders:** in WhatsApp messages, **{company}** and **{bank}** use the client's own company. Set each company's **bank details** in **Settings → Your companies**, so a Netwave reminder shows Netwave's IBAN.
+- **Changing companies:** rename them, change their colours or add another one in **Settings → Your companies**.
+- **Monday email:** the summary includes a **By company** table showing enquiries, deals won, money received, overdue amounts and bills paid for each company.
+
+### Follow-ups for leads and quotations
+- Every open enquiry or quotation has a **📞 next follow-up date**.
+  - New enquiries default to tomorrow.
+  - When you mark a lead **Quotation sent**, the date is set automatically to 3 days later. You can change this in **Settings → General**.
+- Leads due today appear under **📞 Leads & quotations to follow up** on the Home screen, on the **Follow-ups** page and in your 7 AM email.
+- Tap **📞 Follow up**:
+  1. The right WhatsApp message is ready (*Quotation follow-up* or *Enquiry follow-up*). Edit it if you like, then tap **Send on WhatsApp** or **Call**.
+  2. Tap what happened: *No reply*, *Interested*, *Wants changes / discount*, *Call back later*, *Not interested*…
+  3. Choose the next follow-up: tomorrow, 2 days, 3 days, 1 week, 2 weeks, 1 month, or a date.
+  4. Optional: move the lead to *Negotiation*, *Won* or *Lost* in the same step.
+- Every follow-up is saved in the client's history ("Follow-up #3 (WhatsApp): Wants changes – wants 10% off").
+- **Later** moves a follow-up to tomorrow.
+- The **Quotations** board shows how long ago each quotation was sent and when the next follow-up is due.
+
+### Bills to pay (expenses and purchases)
+- Go to **Bills to pay** (on a phone: **Money → Bills I need to pay**), then **+ New bill**. Enter the company, who you pay, the type (rent, DEWA, supplier, VAT to FTA…), the amount and the due date.
+  For monthly or quarterly bills, set **Repeat**.
+- **3 days before** a bill is due (you can change this in **Settings → General**), it appears under **🧾 Bills to pay** on the Home screen. It's also in the 7 AM email to Admins and Managers.
+- Tap **✓ Mark paid** and choose the amount, date and method. For repeating bills, **the next one is added automatically**.
+- **Later** hides a bill until tomorrow.
+- The bills screen shows what's late, what's due in the next 7 days and what you paid this month. **⬇ Excel** exports the list.
+
 ### The Home screen
 Three boxes at the top show **Tasks today**, **Payments to chase** and **Clients waiting**. Click a box to jump to its list.
 - **Tasks:** tap the circle (or **Done**) when something is finished. **Later** moves it to tomorrow.
@@ -184,7 +215,7 @@ To try it straight away, use **Settings → Monday summary email → Send me las
 4. Choose the stage for rows without one (normally **Won (existing client)**), and what to do when a phone number is already in the CRM (**Skip** or **Fill in missing details**).
 5. Click **Import**. UAE numbers like `050 123 4567` are converted to WhatsApp format automatically.
 
-> **Already set up the Google Sheet?** Paste the new `Code.gs` into Apps Script, click Save, run **setup** once more (this schedules the Monday email; your setup key stays the same), then **Deploy → Manage deployments → ✏️ → New version → Deploy**.
+> **Already set up the Google Sheet?** Paste the new `Code.gs` into Apps Script (a **Bills** sheet is added automatically), click Save, run **setup** once more (this schedules the Monday email; your setup key stays the same), then **Deploy → Manage deployments → ✏️ → New version → Deploy**.
 > The **Payments** sheet is created automatically.
 
 - **Quick task:** type it in plain words in the box at the top, for example `Send quotation to Ahmed by Thursday 3pm`. The date, time and client are picked up automatically.

@@ -155,6 +155,11 @@ th{font-size:12.5px;color:var(--muted);font-weight:600}
 .hist .when{font-size:12px;color:var(--muted)}
 .hist .txt{white-space:pre-wrap;word-break:break-word}
 .notebox{padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.biztag{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:700;color:var(--bc);background:color-mix(in srgb,var(--bc) 13%,transparent);white-space:nowrap}
+.bdot{width:9px;height:9px;border-radius:50%;background:var(--bc);display:inline-block;margin-right:5px}
+.bizsel{margin:0 0 12px;font-weight:600;min-height:40px}
+.bizsel-m{border:0;background:none;font-weight:700;padding:0;min-height:0;width:auto;max-width:100%;font-size:15px}
+.tiles.four{grid-template-columns:repeat(4,1fr)}
 .docrow{display:flex;gap:10px;align-items:flex-start;padding:9px 16px;border-bottom:1px solid var(--border);cursor:pointer;font-size:14px}
 .docrow input{width:20px;height:20px;accent-color:var(--green);flex:none;margin:0}
 .docrow span{flex:1} .docrow span.got{color:var(--muted);text-decoration:line-through}
@@ -209,6 +214,7 @@ th{font-size:12.5px;color:var(--muted);font-weight:600}
   .tabs .n{position:absolute;top:3px;left:54%;font-size:10px;padding:0 5px}
   .head h1{font-size:21px}
   .tiles{grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .tiles.four{grid-template-columns:1fr 1fr}
   .tile{padding:10px;border-left-width:0;border-top:4px solid var(--border)}
   .tile.red{border-top-color:var(--red)} .tile.amber{border-top-color:var(--amber)} .tile.green{border-top-color:var(--green)} .tile.blue{border-top-color:var(--blue)}
   .tile .big{font-size:20px} .tile .lbl{font-size:13px} .tile .s{font-size:11.5px}

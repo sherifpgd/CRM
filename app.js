@@ -5,7 +5,7 @@
 
 /* ===================== constants ===================== */
 const KEY = "consultCRM.v1";
-const KINDS = ["clients", "tasks", "payments"];
+const KINDS = ["clients", "tasks", "payments", "bills"];
 const STAGES = ["Enquiry", "Quotation sent", "Negotiation", "Won", "Lost"];
 const STAGE_PILL = { "Enquiry": "blue", "Quotation sent": "amber", "Negotiation": "purple", "Won": "green", "Lost": "gray" };
 const STAGE_COLOR = { "Enquiry": "#2563eb", "Quotation sent": "#d97706", "Negotiation": "#7c3aed", "Won": "#16a34a", "Lost": "#64748b" };
@@ -24,6 +24,14 @@ const DEFAULT_SETTINGS = {
   country: "971",
   bankDetails: "",
   remindEvery: 7,
+  followUpDays: 3,
+  billRemindDays: 3,
+  businesses: [
+    { id: "gts", name: "Gotrack Tech Services FZC", short: "Gotrack Tech", color: "#2563eb", bank: "" },
+    { id: "gtc", name: "Gotrack Tax Consultancy", short: "Gotrack Tax", color: "#0f766e", bank: "" },
+    { id: "ncs", name: "Netwave Computer Systems", short: "Netwave", color: "#c2410c", bank: "" }
+  ],
+  expenseCategories: ["Rent", "Salaries", "DEWA / utilities", "Telecom / internet", "Software subscriptions", "Supplier / purchase", "Licence renewal", "Visa / immigration", "VAT payment to FTA", "Corporate tax payment", "Insurance", "Loan / card payment", "Other"],
   services: ["VAT registration", "VAT return filing", "Corporate tax registration", "Corporate tax filing", "Accounting / bookkeeping", "Audit", "Company formation", "Software / ERP", "Other"],
   sources: ["WhatsApp", "Phone call", "Referral", "Website", "Walk-in", "Instagram", "Google", "Existing client"],
   lostReasons: ["Price too high", "Went with another firm", "No response", "Not needed now", "Other"],
@@ -31,6 +39,7 @@ const DEFAULT_SETTINGS = {
     { name: "Thanks for enquiry", text: "Hello {name}, thank you for contacting {company}. We have received your enquiry about {service} and will get back to you shortly." },
     { name: "Quotation sent", text: "Hello {name}, please find our quotation for {service} attached. Let me know if you have any questions." },
     { name: "Quotation follow-up", text: "Hello {name}, just following up on the quotation we sent for {service}. Shall we go ahead?" },
+    { name: "Enquiry follow-up", text: "Hello {name}, this is {me} from {company}. Following up on your enquiry about {service} – would you like us to send a quotation, or is there a good time to call?" },
     { name: "Documents request", text: "Hello {name}, to proceed with your {service}, please send us the following documents:\n\n{documents}\n\nYou can send clear photos or PDFs here on WhatsApp. Thank you!" }
   ],
   docLists: [
@@ -134,6 +143,32 @@ const clientLabel = c => c ? (c.name || c.company || fmtPhone(c.phone) || "Unnam
 const shortName = c => c ? (c.name || c.company || fmtPhone(c.phone) || "Unnamed") : "";
 const initials = c => (shortName(c).replace(/[^A-Za-z؀-ۿ ]/g, "").split(/\s+/).filter(String).slice(0, 2).map(w => w[0]).join("") || "?").toUpperCase();
 const opt = (v, cur, label) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(label == null ? v : label)}</option>`;
+
+/* ===== your companies (Gotrack Tech, Gotrack Tax, Netwave …) ===== */
+const bizList = () => (local.settings.businesses || []).filter(b => b && b.id && b.name);
+const multiBiz = () => bizList().length > 1;
+const bizById = id => bizList().find(b => b.id === id);
+const bizName = id => { const b = bizById(id); return b ? b.name : ""; };
+const defaultBiz = () => local.biz || (bizList()[0] || {}).id || "";
+// records without a company show everywhere, so nothing is ever hidden by accident
+const inBiz = x => !local.biz || !x.biz || x.biz === local.biz;
+const inBizClient = c => !local.biz || !c.biz || c.biz === local.biz || local.payments.some(p => p.clientId === c.id && p.biz === local.biz) || local.tasks.some(t => t.clientId === c.id && t.biz === local.biz);
+function bizTag(id) {
+  if (!multiBiz() || local.biz) return "";
+  const b = bizById(id); if (!b) return "";
+  return `<span class="biztag" style="--bc:${esc(b.color || "#64748b")}">${esc(b.short || b.name)}</span>`;
+}
+function bizPicker(idp, cur) {
+  if (!multiBiz()) return "";
+  cur = cur || defaultBiz();
+  return `<label class="f"><span>Company</span><div class="chips" id="${idp}_biz" data-val="${esc(cur)}">${bizList().map(b => `<button type="button" data-b="${esc(b.id)}" class="${b.id === cur ? "on" : ""}" style="--bc:${esc(b.color || "#64748b")}"><span class="bdot"></span>${esc(b.short || b.name)}</button>`).join("")}</div></label>`;
+}
+function bizPicked(idp) { const el = $("#" + idp + "_biz"); return el ? el.dataset.val : defaultBiz(); }
+function setBizPicked(idp, id) { const el = $("#" + idp + "_biz"); if (!el) return; el.dataset.val = id; el.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === id)); }
+function bizSwitcher(cls) {
+  if (!multiBiz()) return "";
+  return `<select class="${cls || "bizsel"}" id="${cls === "bizsel-m" ? "bizSelM" : "bizSel"}" title="Show one company or all"><option value="">🏢 All companies</option>${bizList().map(b => opt(b.id, local.biz || "", b.name)).join("")}</select>`;
+}
 
 /* payments */
 const paidOf = p => (p.payments || []).reduce((s, x) => s + num(x.amount), 0);
@@ -253,15 +288,20 @@ function remove(kind, id) {
 }
 function addHistory(c, kind, text) { c.history = c.history || []; c.history.push({ id: uid(), at: nowIso(), by: me().name, kind, text }); }
 function newClient(o) {
-  return Object.assign({ id: uid(), createdAt: nowIso(), name: "", company: "", phone: "", email: "", service: "", stage: "Enquiry", quoteAmount: "",
-    source: "", assignedTo: syncOn() ? me().name : "", notes: "", lostReason: "", trn: "", history: [] }, o || {});
+  return Object.assign({ id: uid(), createdAt: nowIso(), biz: defaultBiz(), name: "", company: "", phone: "", email: "", service: "", stage: "Enquiry", quoteAmount: "",
+    source: "", assignedTo: syncOn() ? me().name : "", notes: "", lostReason: "", trn: "", nextFollowUp: addDays(today(), 1), followUps: 0, history: [] }, o || {});
 }
+const bizOfClient = id => { const c = id && clientById(id); return (c && c.biz) || defaultBiz(); };
 function newTask(o) {
-  return Object.assign({ id: uid(), createdAt: nowIso(), createdBy: me().name, title: "", note: "", dueDate: today(), dueTime: "", repeat: "",
+  return Object.assign({ id: uid(), createdAt: nowIso(), createdBy: me().name, biz: bizOfClient(o && o.clientId), title: "", note: "", dueDate: today(), dueTime: "", repeat: "",
     clientId: "", clientName: "", assignedTo: syncOn() ? me().name : "", done: false, doneAt: "", doneBy: "" }, o || {});
 }
+function newBill(o) {
+  return Object.assign({ id: uid(), createdAt: nowIso(), createdBy: me().name, biz: defaultBiz(), vendor: "", description: "", category: "", amount: "",
+    dueDate: addDays(today(), 7), repeat: "", reference: "", note: "", paidAt: "", paidAmount: "", paidMethod: "", paidBy: "" }, o || {});
+}
 function newPayment(o) {
-  return Object.assign({ id: uid(), createdAt: nowIso(), createdBy: me().name, clientId: "", clientName: "", description: "", invoiceNo: "", amount: "",
+  return Object.assign({ id: uid(), createdAt: nowIso(), createdBy: me().name, biz: bizOfClient(o && o.clientId), clientId: "", clientName: "", description: "", invoiceNo: "", amount: "",
     issueDate: today(), dueDate: addDays(today(), 7), repeat: "", payments: [], reminders: [], nextReminder: "", lastReminderAt: "", note: "" }, o || {});
 }
 function completeTask(t, done) {
@@ -272,7 +312,7 @@ function completeTask(t, done) {
   if (c && done) { addHistory(c, "task", "✔ Done: " + t.title); put("clients", c); }
   if (done && t.repeat && t.dueDate) {
     const next = t.repeat === "weekly" ? addDays(t.dueDate, 7) : addMonths(t.dueDate, { monthly: 1, quarterly: 3, yearly: 12 }[t.repeat]);
-    const n = newTask({ title: t.title, note: t.note, dueDate: next, dueTime: t.dueTime, repeat: t.repeat, clientId: t.clientId, clientName: t.clientName, assignedTo: t.assignedTo });
+    const n = newTask({ title: t.title, note: t.note, dueDate: next, dueTime: t.dueTime, repeat: t.repeat, clientId: t.clientId, clientName: t.clientName, assignedTo: t.assignedTo, biz: t.biz });
     put("tasks", n); logAct("Task added", n, "Repeats: next " + fmtDate(next));
     toast("Done ✔  Next one is on " + fmtDate(next));
   } else if (done) toast("Done ✔");
@@ -291,7 +331,7 @@ function generateRecurring() {
       const nid = p.id + "-r";
       if (local.payments.some(x => x.id === nid) || local.deleted.payments.indexOf(nid) >= 0) return;
       const gap = p.dueDate && p.issueDate ? daysBetween(p.issueDate, p.dueDate) : 7;
-      const n = newPayment({ id: nid, clientId: p.clientId, clientName: p.clientName, description: p.description, amount: p.amount, repeat: p.repeat,
+      const n = newPayment({ id: nid, biz: p.biz, clientId: p.clientId, clientName: p.clientName, description: p.description, amount: p.amount, repeat: p.repeat,
         issueDate: nextIssue, dueDate: addDays(nextIssue, gap), note: p.note, createdBy: "Auto (repeating)" });
       put("payments", n); logAct("Invoice added", n, "Repeating · " + money(n.amount)); made++; changed = true;
     });
@@ -373,14 +413,16 @@ function handleSyncError(e) {
 }
 
 /* ===================== layout ===================== */
-const VIEWS = { home: renderHome, tasks: renderTasks, clients: renderClients, pipeline: renderPipeline, payments: renderPayments, activity: renderActivity, settings: renderSettings };
+const VIEWS = { home: renderHome, tasks: renderTasks, followups: renderFollowups, clients: renderClients, pipeline: renderPipeline, payments: renderPayments, bills: renderBills, activity: renderActivity, settings: renderSettings };
 function counts() {
   const td = today();
-  const open = local.tasks.filter(t => !t.done && mineFilter(t));
+  const open = local.tasks.filter(t => !t.done && mineFilter(t) && inBiz(t));
   return {
     tasksDue: open.filter(t => t.dueDate && t.dueDate <= td).length,
     tasksLate: open.filter(t => t.dueDate && (t.dueDate < td || (t.dueDate === td && t.dueTime && t.dueTime < nowHM()))).length,
-    chase: local.payments.filter(needsChase).length
+    chase: local.payments.filter(p => needsChase(p) && inBiz(p)).length,
+    follow: local.clients.filter(c => needsFollow(c) && inBizClient(c)).length,
+    bills: local.bills.filter(b => billDueSoon(b) && inBiz(b)).length
   };
 }
 function render() {
@@ -392,12 +434,15 @@ function render() {
   const tb = (v, icon, label, n, also) => `<button data-nav="${v}" class="${view === v || (also || []).indexOf(view) >= 0 ? "active" : ""}"><span class="i">${icon}</span>${label}${n ? `<span class="n">${n}</span>` : ""}</button>`;
   root.innerHTML = `<div class="app">
     <aside class="nav">
-      <div class="brand"><img src="icon.svg" alt=""><div>${esc(local.settings.companyName)}<small>CRM</small></div></div>
-      ${nb("home", "🏠", "Home", k.tasksDue + k.chase)}
+      <div class="brand"><img src="icon.svg" alt=""><div>${esc(local.biz ? bizName(local.biz) : local.settings.companyName)}<small>CRM</small></div></div>
+      ${bizSwitcher()}
+      ${nb("home", "🏠", "Home", k.tasksDue + k.chase + k.follow + k.bills)}
       ${nb("tasks", "✅", "Tasks", k.tasksDue)}
+      ${nb("followups", "📞", "Follow-ups", k.follow)}
       ${nb("clients", "👥", "Clients")}
       ${nb("pipeline", "📊", "Quotations")}
-      ${nb("payments", "💰", "Payments", k.chase)}
+      ${nb("payments", "💰", "Clients owe me", k.chase)}
+      ${nb("bills", "🧾", "Bills to pay", k.bills)}
       ${can("activity") && syncOn() ? nb("activity", "🕘", "Activity log") : ""}
       ${nb("settings", "⚙️", "Settings")}
       <div class="navfoot"><div class="syncst">${syncLabel()}</div>
@@ -405,18 +450,19 @@ function render() {
         <div>${themeBtn()}</div></div>
     </aside>
     <div style="min-width:0">
-      <header class="mtop"><div class="t">${esc(local.settings.companyName)}<small>${esc(me().name)} · <span class="syncst">${syncLabel()}</span></small></div>
+      <header class="mtop"><div class="t">${multiBiz() ? bizSwitcher("bizsel-m") : esc(local.settings.companyName)}<small>${esc(me().name)} · <span class="syncst">${syncLabel()}</span></small></div>
         ${themeBtn("iconbtn")}<button class="iconbtn" data-nav="settings" title="Settings">⚙️</button></header>
       <main id="main"></main>
     </div>
   </div>
   <nav class="tabs">
-    ${tb("home", "🏠", "Home", k.tasksDue + k.chase)}
-    ${tb("tasks", "✅", "Tasks")}
+    ${tb("home", "🏠", "Home", k.tasksDue + k.chase + k.follow + k.bills)}
+    ${tb("tasks", "✅", "Tasks", 0, ["followups"])}
     <button class="plus" data-act="addmenu"><span class="i">+</span>Add</button>
-    ${tb("payments", "💰", "Payments")}
+    ${tb("payments", "💰", "Money", 0, ["bills"])}
     ${tb("clients", "👥", "Clients", 0, ["pipeline"])}
   </nav>`;
+  ["#bizSel", "#bizSelM"].forEach(id => { const s = $(id); if (s) s.onchange = () => { local.biz = s.value; persist(); render(); toast(s.value ? "Showing " + bizName(s.value) : "Showing all companies"); }; });
   VIEWS[view]($("#main"));
   document.title = (k.tasksLate ? "(" + k.tasksLate + ") " : "") + local.settings.companyName + " CRM";
   if (openClientId) renderDrawer();
@@ -435,7 +481,7 @@ function taskItem(t, opts) {
         ${c && !opts.noClient ? `<a href="#" data-client="${c.id}">${esc(shortName(c))}</a>` : ""}
         ${t.assignedTo && syncOn() ? `<span>👤 ${esc(t.assignedTo)}</span>` : ""}
         ${t.repeat ? `<span>🔁 ${esc(REPEATS[t.repeat])}</span>` : ""}
-        ${t.fromWhatsApp ? `<span title="Created from a WhatsApp message">💬</span>` : ""}</div>
+        ${t.fromWhatsApp ? `<span title="Created from a WhatsApp message">💬</span>` : ""}${bizTag(t.biz)}</div>
     </div>
     ${!t.done ? `<div class="btns">
       ${c && c.phone ? `<a class="btn sm" href="${waLink(c.phone)}" target="_blank" rel="noopener" title="Open WhatsApp chat">💬<span class="hide-m"> Chat</span></a>` : ""}
@@ -453,7 +499,7 @@ function payItem(p, opts) {
     <div class="main" data-editpay="${p.id}">
       <div class="t">${esc(opts.noClient ? (p.description || "Invoice") : (shortName(c) || p.clientName || "No client"))}</div>
       <div class="m">${opts.noClient ? "" : `<span>${esc(p.description || "")}</span>`}${p.invoiceNo ? `<span>#${esc(p.invoiceNo)}</span>` : ""}
-        <span class="pill ${st.cls}">${st.text}</span>${last ? `<span>${esc(last)}</span>` : ""}${p.repeat ? `<span>🔁 ${esc(REPEATS[p.repeat])}</span>` : ""}</div>
+        <span class="pill ${st.cls}">${st.text}</span>${last ? `<span>${esc(last)}</span>` : ""}${p.repeat ? `<span>🔁 ${esc(REPEATS[p.repeat])}</span>` : ""}${bizTag(p.biz)}</div>
     </div>
     <div class="amt">${money(isPaid(p) ? p.amount : bal)}${!isPaid(p) && paidOf(p) > 0 ? `<small>of ${money(p.amount)}</small>` : isPaid(p) ? `<small>received</small>` : ""}</div>
     ${!isPaid(p) && ed ? `<div class="btns">
@@ -469,25 +515,27 @@ const mineFilter = t => !syncOn() || taskFilter.who === "all" || (taskFilter.who
 /* ===================== HOME ===================== */
 function renderHome(main) {
   const td = today(), wk = addDays(td, 7);
-  const open = local.tasks.filter(t => !t.done && mineFilter(t)).sort(byDue);
+  const open = local.tasks.filter(t => !t.done && mineFilter(t) && inBiz(t)).sort(byDue);
   const late = open.filter(t => t.dueDate && t.dueDate < td), tod = open.filter(t => t.dueDate === td);
   const soon = open.filter(t => t.dueDate > td && t.dueDate <= wk), nodate = open.filter(t => !t.dueDate);
-  const chase = local.payments.filter(needsChase).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-  const unpaid = local.payments.filter(p => !isPaid(p));
+  const chase = local.payments.filter(p => needsChase(p) && inBiz(p)).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const unpaid = local.payments.filter(p => !isPaid(p) && inBiz(p));
   const overdueAmt = unpaid.filter(p => p.dueDate && p.dueDate < td).reduce((s, p) => s + balanceOf(p), 0);
-  const hasTask = {}; local.tasks.forEach(t => { if (!t.done && t.clientId) hasTask[t.clientId] = true; });
-  const waiting = local.clients.filter(c => OPEN_STAGES.indexOf(c.stage) >= 0 && !hasTask[c.id]).sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""));
+  const follow = local.clients.filter(c => needsFollow(c) && inBizClient(c)).sort(byFollow);
+  const bills = local.bills.filter(b => billDueSoon(b) && inBiz(b)).sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+  const billsLate = bills.filter(b => b.dueDate < td);
   const hr = new Date().getHours();
   const hello = (hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening") + (me().name && me().name !== "Me" ? ", " + me().name.split(" ")[0] : "");
-  const doneToday = local.tasks.filter(t => t.done && (t.doneAt || "").slice(0, 10) === td && mineFilter(t)).length;
-  const allClear = !late.length && !tod.length && !chase.length;
+  const doneToday = local.tasks.filter(t => t.done && (t.doneAt || "").slice(0, 10) === td && mineFilter(t) && inBiz(t)).length;
+  const allClear = !late.length && !tod.length && !chase.length && !follow.length && !bills.length;
   main.innerHTML = `
-    <div class="head"><h1>${esc(hello)} 👋</h1><div class="sub">${fmtLong(td)} · ${allClear ? "Nothing urgent today 🎉" : "Here's what needs doing today"}${doneToday ? " · " + doneToday + " done so far" : ""}</div></div>
+    <div class="head"><h1>${esc(hello)} 👋</h1><div class="sub">${fmtLong(td)}${local.biz ? " · " + esc(bizName(local.biz)) : ""} · ${allClear ? "Nothing urgent today 🎉" : "Here's what needs doing today"}${doneToday ? " · " + doneToday + " done so far" : ""}</div></div>
     ${introCard()}
-    <div class="tiles">
+    <div class="tiles four">
       <div class="tile ${late.length ? "red" : tod.length ? "amber" : "green"}" data-jump="sec-tasks"><div class="big">${late.length + tod.length}</div><div class="lbl">Tasks today</div><div class="s">${late.length ? late.length + " late" : "none late"}</div></div>
+      <div class="tile ${follow.length ? "amber" : "green"}" data-jump="sec-follow"><div class="big">${follow.length}</div><div class="lbl">Follow-ups</div><div class="s">leads & quotations</div></div>
       <div class="tile ${chase.length ? "red" : "green"}" data-jump="sec-pay"><div class="big">${chase.length}</div><div class="lbl">Payments to chase</div><div class="s">${overdueAmt ? money(overdueAmt) + " overdue" : "all on time"}</div></div>
-      <div class="tile ${waiting.length ? "amber" : "green"}" data-jump="sec-wait"><div class="big">${waiting.length}</div><div class="lbl">Clients waiting</div><div class="s">no next step set</div></div>
+      <div class="tile ${billsLate.length ? "red" : bills.length ? "amber" : "green"}" data-jump="sec-bills"><div class="big">${bills.length}</div><div class="lbl">Bills to pay</div><div class="s">${bills.length ? money(bills.reduce((s, b) => s + num(b.amount), 0)) : "nothing due"}</div></div>
     </div>
     ${quickAddBox()}
     ${syncOn() ? `<div style="margin-top:12px"><select id="whoSel" style="width:auto">${whoOptions()}</select></div>` : ""}
@@ -502,14 +550,14 @@ function renderHome(main) {
       ${chase.length ? listOf(chase, payItem) : `<div class="empty">${unpaid.length ? "No reminders due today. " + unpaid.length + " unpaid invoice(s) are not due yet." : "No unpaid invoices." + (can("edit") ? ` <button class="linkbtn" data-act="newpay">Add an invoice</button>` : "")}</div>`}
     </section>
 
-    ${waiting.length ? `<section class="sec" id="sec-wait"><header><h2>👥 Clients waiting for you</h2></header>
-      <div class="hint" style="padding:10px 16px 0">These enquiries have no next step, so nothing will remind you about them. Add a follow-up.</div>
-      ${waiting.slice(0, 12).map(c => `<div class="item nodone"><div class="avatar">${esc(initials(c))}</div>
-        <div class="main" data-client="${c.id}"><div class="t">${esc(clientLabel(c))}</div>
-          <div class="m"><span class="pill ${STAGE_PILL[c.stage]}">${esc(c.stage)}</span>${c.service ? `<span>${esc(c.service)}</span>` : ""}<span>last update ${ago(c.updatedAt)}</span></div></div>
-        ${can("edit") ? `<div class="btns"><button class="btn sm" data-followup="${c.id}">+ Follow-up</button></div>` : ""}</div>`).join("")}
-      ${waiting.length > 12 ? `<div class="empty"><button class="linkbtn" data-nav="clients">See all ${waiting.length} →</button></div>` : ""}
-    </section>` : `<div id="sec-wait"></div>`}
+    <section class="sec" id="sec-follow"><header><h2>📞 Leads & quotations to follow up</h2><button class="linkbtn" data-nav="followups">All follow-ups →</button></header>
+      ${follow.length ? listOf(follow.slice(0, 12), followItem) + (follow.length > 12 ? `<div class="empty"><button class="linkbtn" data-nav="followups">See all ${follow.length} →</button></div>` : "")
+        : `<div class="empty">No follow-ups due today.</div>`}
+    </section>
+
+    <section class="sec" id="sec-bills"><header><h2>🧾 Bills to pay</h2><button class="linkbtn" data-nav="bills">All bills →</button></header>
+      ${bills.length ? listOf(bills, billItem) : `<div class="empty">Nothing due in the next ${local.settings.billRemindDays || 3} days.${can("edit") ? ` <button class="linkbtn" data-act="newbill">Add a bill</button>` : ""}</div>`}
+    </section>
 
     ${soon.length || nodate.length ? `<section class="sec"><header><h2>📅 Coming up</h2></header>
       ${soon.length ? `<div class="sub-h">Next 7 days (${soon.length})</div>${listOf(soon, taskItem)}` : ""}
@@ -549,7 +597,7 @@ function notifPrompt() {
 /* ===================== TASKS ===================== */
 function renderTasks(main) {
   const q = taskFilter.q.toLowerCase(), td = today();
-  let arr = local.tasks.filter(mineFilter).filter(t => taskFilter.show === "all" || (taskFilter.show === "done" ? t.done : !t.done));
+  let arr = local.tasks.filter(mineFilter).filter(inBiz).filter(t => taskFilter.show === "all" || (taskFilter.show === "done" ? t.done : !t.done));
   if (q) arr = arr.filter(t => (t.title + " " + t.note + " " + t.clientName).toLowerCase().indexOf(q) >= 0);
   arr.sort(taskFilter.show === "done" ? (a, b) => (b.doneAt || "").localeCompare(a.doneAt || "") : byDue);
   let body;
@@ -574,14 +622,15 @@ function renderTasks(main) {
 /* ===================== PAYMENTS ===================== */
 function renderPayments(main) {
   const td = today(), q = payFilter.q.toLowerCase();
-  const unpaid = local.payments.filter(p => !isPaid(p));
+  const pays = local.payments.filter(inBiz);
+  const unpaid = pays.filter(p => !isPaid(p));
   const overdue = unpaid.filter(p => p.dueDate && p.dueDate < td);
   const month = td.slice(0, 7);
-  const recMonth = local.payments.reduce((s, p) => s + (p.payments || []).filter(x => (x.date || "").slice(0, 7) === month).reduce((a, x) => a + num(x.amount), 0), 0);
-  let arr = local.payments.filter(p => payFilter.show === "all" || (payFilter.show === "paid" ? isPaid(p) : payFilter.show === "overdue" ? !isPaid(p) && p.dueDate < td : !isPaid(p)));
+  const recMonth = pays.reduce((s, p) => s + (p.payments || []).filter(x => (x.date || "").slice(0, 7) === month).reduce((a, x) => a + num(x.amount), 0), 0);
+  let arr = pays.filter(p => payFilter.show === "all" || (payFilter.show === "paid" ? isPaid(p) : payFilter.show === "overdue" ? !isPaid(p) && p.dueDate < td : !isPaid(p)));
   if (q) arr = arr.filter(p => (p.clientName + " " + p.description + " " + p.invoiceNo + " " + clientLabel(clientById(p.clientId))).toLowerCase().indexOf(q) >= 0);
   arr.sort(payFilter.show === "paid" ? (a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "") : (a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
-  main.innerHTML = `<div class="head"><h1>Payments</h1>${can("export") ? `<button class="btn hide-m" data-act="exportpay">⬇ Excel</button>` : ""}${can("edit") ? `<button class="btn primary" data-act="newpay">+ New invoice</button>` : ""}</div>
+  main.innerHTML = `${moneySwitch("payments")}<div class="head"><h1>Clients owe me</h1>${can("export") ? `<button class="btn hide-m" data-act="exportpay">⬇ Excel</button>` : ""}${can("edit") ? `<button class="btn primary" data-act="newpay">+ New invoice</button>` : ""}</div>
     <div class="tiles">
       <div class="tile ${overdue.length ? "red" : "green"}" data-pf="overdue"><div class="big">${money(overdue.reduce((s, p) => s + balanceOf(p), 0))}</div><div class="lbl">Overdue</div><div class="s">${overdue.length} invoice(s)</div></div>
       <div class="tile amber" data-pf="unpaid"><div class="big">${money(unpaid.reduce((s, p) => s + balanceOf(p), 0))}</div><div class="lbl">Waiting to be paid</div><div class="s">${unpaid.length} invoice(s)</div></div>
@@ -597,13 +646,205 @@ function renderPayments(main) {
   $("#pshow").onclick = e => { const b = e.target.closest("[data-v]"); if (b) { payFilter.show = b.dataset.v; renderPayments(main); } };
   main.querySelectorAll("[data-pf]").forEach(t => t.onclick = () => { payFilter.show = t.dataset.pf; renderPayments(main); });
 }
+const moneySwitch = cur => `<div class="seg" style="margin-bottom:14px"><button data-nav="payments" class="${cur === "payments" ? "on" : ""}">💰 Clients owe me</button><button data-nav="bills" class="${cur === "bills" ? "on" : ""}">🧾 Bills I need to pay</button></div>`;
+const bizBank = id => { const b = bizById(id); return (b && b.bank) || local.settings.bankDetails || ""; };
+const bizCompany = id => bizName(id) || local.settings.companyName || "";
+
+/* ===================== BILLS TO PAY (expenses / purchases) ===================== */
+const billDueSoon = b => !b.paidAt && b.dueDate && b.dueDate <= addDays(today(), +local.settings.billRemindDays || 3) && (!b.snoozedTo || b.snoozedTo <= today());
+function billStatus(b) {
+  if (b.paidAt) return { text: "Paid " + fmtDate(b.paidAt.slice(0, 10)), cls: "green" };
+  const d = daysBetween(today(), b.dueDate || today());
+  if (d < 0) return { text: (-d) + (d === -1 ? " day late" : " days late"), cls: "red" };
+  if (d === 0) return { text: "Due today", cls: "red" };
+  if (d === 1) return { text: "Due tomorrow", cls: "amber" };
+  return { text: "Due " + fmtDate(b.dueDate), cls: d <= (+local.settings.billRemindDays || 3) ? "amber" : "gray" };
+}
+function billItem(b) {
+  const st = billStatus(b), ed = can("edit");
+  return `<div class="item nodone">
+    <div class="avatar" style="background:var(--amber-soft);color:var(--amber)">🧾</div>
+    <div class="main" data-editbill="${b.id}"><div class="t">${esc(b.vendor || "Bill")}</div>
+      <div class="m">${b.description || b.category ? `<span>${esc(b.description || b.category)}</span>` : ""}<span class="pill ${st.cls}">${st.text}</span>${b.repeat ? `<span>🔁 ${esc(REPEATS[b.repeat])}</span>` : ""}${b.reference ? `<span>Ref ${esc(b.reference)}</span>` : ""}${bizTag(b.biz)}</div></div>
+    <div class="amt">${money(b.paidAt ? (b.paidAmount || b.amount) : b.amount)}${b.paidAt ? `<small>${esc(b.paidMethod || "paid")}</small>` : ""}</div>
+    ${!b.paidAt && ed ? `<div class="btns"><button class="btn sm primary" data-paybill="${b.id}">✓ Mark paid</button><button class="btn sm" data-billlater="${b.id}">Later</button></div>` : ""}
+  </div>`;
+}
+let billFilter = { show: "topay", q: "" };
+function renderBills(main) {
+  const td = today(), q = billFilter.q.toLowerCase(), month = td.slice(0, 7);
+  const all = local.bills.filter(inBiz), unpaid = all.filter(b => !b.paidAt);
+  const late = unpaid.filter(b => b.dueDate < td), week = unpaid.filter(b => b.dueDate >= td && b.dueDate <= addDays(td, 7));
+  const paidMonth = all.filter(b => b.paidAt && b.paidAt.slice(0, 7) === month);
+  let arr = all.filter(b => billFilter.show === "all" || (billFilter.show === "paid" ? b.paidAt : !b.paidAt));
+  if (q) arr = arr.filter(b => (b.vendor + " " + b.description + " " + b.category + " " + b.reference).toLowerCase().indexOf(q) >= 0);
+  arr.sort(billFilter.show === "paid" ? (a, b) => (b.paidAt || "").localeCompare(a.paidAt || "") : (a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+  const sum = a => money(a.reduce((s, b) => s + num(b.paidAt ? (b.paidAmount || b.amount) : b.amount), 0));
+  main.innerHTML = `${moneySwitch("bills")}<div class="head"><h1>Bills to pay</h1>${can("export") ? `<button class="btn hide-m" data-act="exportbills">⬇ Excel</button>` : ""}${can("edit") ? `<button class="btn primary" data-act="newbill">+ New bill</button>` : ""}
+      <div class="sub">Rent, DEWA, salaries, suppliers, subscriptions, VAT and other payments you have to make. You'll be reminded ${local.settings.billRemindDays || 3} days before each one is due.</div></div>
+    <div class="tiles">
+      <div class="tile ${late.length ? "red" : "green"}" data-bf="topay"><div class="big">${sum(late)}</div><div class="lbl">Late</div><div class="s">${late.length} bill(s)</div></div>
+      <div class="tile amber" data-bf="topay"><div class="big">${sum(week)}</div><div class="lbl">Due in 7 days</div><div class="s">${week.length} bill(s)</div></div>
+      <div class="tile green" data-bf="paid"><div class="big">${sum(paidMonth)}</div><div class="lbl">Paid this month</div><div class="s">${paidMonth.length} bill(s)</div></div>
+    </div>
+    <div class="bar">
+      <div class="seg" id="bshow">${[["topay", "To pay"], ["paid", "Paid"], ["all", "All"]].map(([v, l]) => `<button data-v="${v}" class="${billFilter.show === v ? "on" : ""}">${l}</button>`).join("")}</div>
+      <input type="search" id="bq" placeholder="🔍 Search supplier, bill" value="${esc(billFilter.q)}">
+    </div>
+    <section class="sec" style="margin-top:0">${arr.length ? listOf(arr.slice(0, 500), billItem) : `<div class="empty">${all.length ? "Nothing here." : "No bills yet. Add rent, DEWA, subscriptions or supplier invoices – set <b>Repeat</b> for monthly ones and you'll never miss them."}</div>`}</section>`;
+  $("#bq").oninput = e => { billFilter.q = e.target.value; const p = e.target.selectionStart; renderBills(main); const i = $("#bq"); i.focus(); i.setSelectionRange(p, p); };
+  $("#bshow").onclick = e => { const b = e.target.closest("[data-v]"); if (b) { billFilter.show = b.dataset.v; renderBills(main); } };
+  main.querySelectorAll("[data-bf]").forEach(t => t.onclick = () => { billFilter.show = t.dataset.bf; renderBills(main); });
+}
+function billForm(b, isNew) {
+  const ed = can("edit"), cats = local.settings.expenseCategories || [];
+  const vendors = local.bills.map(x => x.vendor).filter((v, i, a) => v && a.indexOf(v) === i);
+  modal(`<h2>${isNew ? "New bill to pay" : "Bill"}</h2>
+    ${!isNew ? `<div class="hint">${esc(billStatus(b).text)}${b.paidAt ? " · " + money(b.paidAmount || b.amount) + (b.paidMethod ? " by " + esc(b.paidMethod) : "") + (b.paidBy && syncOn() ? " · " + esc(b.paidBy) : "") : ""}</div>` : `<div class="hint">A payment you need to make – you'll be reminded before it's due.</div>`}
+    <div class="stack" style="margin-top:12px">
+      ${bizPicker("bf", b.biz)}
+      <div class="row2"><label class="f"><span>Pay to</span><input type="text" id="bf_vendor" value="${esc(b.vendor)}" list="bf_vlist" placeholder="e.g. DEWA, landlord, supplier"><datalist id="bf_vlist">${vendors.map(v => `<option>${esc(v)}</option>`).join("")}</datalist></label>
+        <label class="f"><span>Amount (AED)</span><input type="text" inputmode="decimal" id="bf_amount" value="${esc(b.amount)}"></label></div>
+      <label class="f"><span>Type</span><select id="bf_cat"><option value="">–</option>${cats.map(c => opt(c, b.category)).join("")}</select></label>
+      <label class="f"><span>What for (optional)</span><input type="text" id="bf_desc" value="${esc(b.description)}" placeholder="e.g. Office rent – Dec, invoice 4471"></label>
+      <div class="row2 keep"><label class="f"><span>Due date</span><input type="date" id="bf_due" value="${esc(b.dueDate)}"></label>
+        <label class="f"><span>Repeat</span><select id="bf_rep">${Object.keys(REPEATS).map(k => opt(k, b.repeat, REPEATS[k])).join("")}</select></label></div>
+      <label class="f"><span>Account / reference no. (optional)</span><input type="text" id="bf_ref" value="${esc(b.reference)}"></label>
+      <label class="f"><span>Notes</span><textarea id="bf_note" style="min-height:60px">${esc(b.note)}</textarea></label>
+    </div>
+    <div class="mfoot">
+      ${!isNew && can("delete") ? `<button class="btn danger" id="bf_del" style="margin-right:auto">Delete</button>` : ""}
+      <button class="btn" data-act="mclose">Cancel</button>
+      ${!isNew && ed && !b.paidAt ? `<button class="btn" id="bf_paid">✓ Mark paid</button>` : ""}
+      ${!isNew && ed && b.paidAt ? `<button class="btn" id="bf_unpaid">Mark not paid</button>` : ""}
+      ${ed ? `<button class="btn primary" id="bf_save">${isNew ? "Add bill" : "Save"}</button>` : ""}
+    </div>`);
+  const save = () => {
+    const vendor = $("#bf_vendor").value.trim(), amount = num($("#bf_amount").value);
+    if (!vendor) { toast("Who do you pay?"); return false; }
+    Object.assign(b, { biz: bizPicked("bf"), vendor, amount: amount ? String(amount) : "", category: $("#bf_cat").value, description: $("#bf_desc").value.trim(),
+      dueDate: $("#bf_due").value || today(), repeat: $("#bf_rep").value, reference: $("#bf_ref").value.trim(), note: $("#bf_note").value.trim() });
+    put("bills", b); logAct(isNew ? "Bill added" : "Bill edited", { id: b.id, title: b.vendor }, money(b.amount) + " · due " + b.dueDate);
+    return true;
+  };
+  if ($("#bf_save")) $("#bf_save").onclick = () => { if (save()) { closeModal(); toast(isNew ? "Bill added – reminder " + (local.settings.billRemindDays || 3) + " days before " + fmtDate(b.dueDate) : "Saved"); render(); } };
+  if ($("#bf_paid")) $("#bf_paid").onclick = () => { if (save()) payBillForm(b); };
+  if ($("#bf_unpaid")) $("#bf_unpaid").onclick = () => { b.paidAt = ""; b.paidAmount = ""; b.paidMethod = ""; put("bills", b); logAct("Bill marked unpaid", { id: b.id, title: b.vendor }, ""); closeModal(); render(); };
+  if ($("#bf_del")) $("#bf_del").onclick = () => { if (confirm("Delete this bill?" + (b.repeat ? " (It will stop repeating.)" : ""))) { logAct("Bill deleted", { id: b.id, title: b.vendor }, money(b.amount)); remove("bills", b.id); closeModal(); render(); } };
+}
+function payBillForm(b) {
+  modal(`<h2>✓ Bill paid</h2><div class="hint">${esc(b.vendor)} · ${esc(b.description || b.category || "")} · ${money(b.amount)}</div>
+    <div class="stack" style="margin-top:12px">
+      <div class="row2 keep"><label class="f"><span>Amount paid (AED)</span><input type="text" inputmode="decimal" id="pb_amt" value="${esc(b.amount)}"></label>
+        <label class="f"><span>Date</span><input type="date" id="pb_date" value="${today()}"></label></div>
+      <label class="f"><span>How</span><div class="chips" id="pb_m">${METHODS.map((m, i) => `<button data-m="${esc(m)}" class="${i === 0 ? "on" : ""}">${esc(m)}</button>`).join("")}</div></label>
+      ${b.repeat ? `<div class="detect">🔁 The next ${esc(b.vendor)} bill will be added automatically for <b>${fmtLong(nextBillDate(b))}</b>.</div>` : ""}
+    </div>
+    <div class="mfoot"><button class="btn" data-act="mclose">Cancel</button><button class="btn primary" id="pb_ok">Save</button></div>`);
+  let method = METHODS[0];
+  $("#pb_m").onclick = e => { const x = e.target.closest("[data-m]"); if (!x) return; method = x.dataset.m; $("#pb_m").querySelectorAll("button").forEach(y => y.classList.toggle("on", y === x)); };
+  $("#pb_ok").onclick = () => {
+    b.paidAt = ($("#pb_date").value || today()) + "T12:00:00"; b.paidAmount = String(num($("#pb_amt").value) || num(b.amount)); b.paidMethod = method; b.paidBy = me().name;
+    put("bills", b); logAct("Bill paid", { id: b.id, title: b.vendor }, money(b.paidAmount) + " · " + method);
+    if (b.repeat) {
+      const nid = b.id + "-r";
+      if (!local.bills.some(x => x.id === nid) && local.deleted.bills.indexOf(nid) < 0) {
+        const n = newBill({ id: nid, biz: b.biz, vendor: b.vendor, description: b.description, category: b.category, amount: b.amount, repeat: b.repeat, reference: b.reference, note: b.note, dueDate: nextBillDate(b) });
+        put("bills", n); logAct("Bill added", { id: n.id, title: n.vendor }, "Repeating · due " + n.dueDate);
+      }
+    }
+    closeModal(); toast("Paid ✔" + (b.repeat ? "  Next one due " + fmtDate(nextBillDate(b)) : "")); render();
+  };
+}
+const nextBillDate = b => b.repeat === "weekly" ? addDays(b.dueDate, 7) : addMonths(b.dueDate, { monthly: 1, quarterly: 3, yearly: 12 }[b.repeat] || 1);
+
+/* ===================== FOLLOW-UPS (leads & quotations) ===================== */
+// an open lead needs a follow-up when its follow-up date has come – or when it has no date and no task at all
+function needsFollow(c) {
+  if (OPEN_STAGES.indexOf(c.stage) < 0) return false;
+  if (c.nextFollowUp) return c.nextFollowUp <= today();
+  return !local.tasks.some(t => !t.done && t.clientId === c.id);
+}
+const byFollow = (a, b) => (STAGES.indexOf(b.stage) - STAGES.indexOf(a.stage)) || (a.nextFollowUp || "").localeCompare(b.nextFollowUp || "");
+const quoteAge = c => { const h = (c.history || []).filter(x => x.kind === "stage" && /→ Quotation sent/.test(x.text)).pop(); return h ? daysBetween(h.at.slice(0, 10), today()) : null; };
+function followItem(c) {
+  const ed = can("edit"), qa = quoteAge(c);
+  const due = !c.nextFollowUp ? "No follow-up date" : c.nextFollowUp < today() ? daysBetween(c.nextFollowUp, today()) + " day(s) late" : c.nextFollowUp === today() ? "Today" : fmtDate(c.nextFollowUp);
+  return `<div class="item nodone">
+    <div class="avatar">${esc(initials(c))}</div>
+    <div class="main" data-client="${c.id}"><div class="t">${esc(clientLabel(c))}</div>
+      <div class="m"><span class="pill ${STAGE_PILL[c.stage]}">${esc(c.stage)}</span>${c.quoteAmount ? `<b>${money(c.quoteAmount)}</b>` : ""}${c.service ? `<span>${esc(c.service)}</span>` : ""}
+        ${qa != null && c.stage !== "Enquiry" ? `<span>quote sent ${qa}d ago</span>` : ""}${c.followUps ? `<span>followed up ${c.followUps}×</span>` : ""}
+        <span class="${c.nextFollowUp && c.nextFollowUp < today() ? "red" : "amber"}" style="font-weight:600">📞 ${due}</span>${bizTag(c.biz)}</div></div>
+    ${ed ? `<div class="btns"><button class="btn sm wa" data-follow="${c.id}">📞 Follow up</button><button class="btn sm" data-followlater="${c.id}">Later</button></div>` : ""}
+  </div>`;
+}
+let followFilter = { show: "due" };
+function renderFollowups(main) {
+  const open = local.clients.filter(c => OPEN_STAGES.indexOf(c.stage) >= 0 && inBizClient(c));
+  const due = open.filter(needsFollow).sort(byFollow);
+  const arr = followFilter.show === "due" ? due : open.slice().sort((a, b) => (a.nextFollowUp || "0").localeCompare(b.nextFollowUp || "0"));
+  const qv = open.filter(c => c.stage !== "Enquiry").reduce((s, c) => s + num(c.quoteAmount), 0);
+  main.innerHTML = `<div class="head"><h1>Follow-ups</h1>${can("edit") ? `<button class="btn primary" data-act="newclient">+ New enquiry</button>` : ""}
+      <div class="sub">Every open enquiry and quotation has a next follow-up date. Tap <b>Follow up</b> to send a WhatsApp message, note what they said and set the next date.</div></div>
+    <div class="tiles">
+      <div class="tile ${due.length ? "amber" : "green"}" data-ff="due"><div class="big">${due.length}</div><div class="lbl">Due now</div><div class="s">to follow up today</div></div>
+      <div class="tile blue" data-ff="all"><div class="big">${open.length}</div><div class="lbl">Open leads</div><div class="s">${open.filter(c => c.stage === "Enquiry").length} enquiries · ${open.filter(c => c.stage !== "Enquiry").length} quotations</div></div>
+      <div class="tile green" data-nav="pipeline"><div class="big">${money(qv)}</div><div class="lbl">Quoted, waiting</div><div class="s">open quotation value</div></div>
+    </div>
+    <div class="bar"><div class="seg" id="fshow">${[["due", "Due now"], ["all", "All open leads"]].map(([v, l]) => `<button data-v="${v}" class="${followFilter.show === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+    <section class="sec" style="margin-top:0">${arr.length ? listOf(arr, followItem) : `<div class="empty">${followFilter.show === "due" ? "All caught up 🎉 No follow-ups due." : "No open enquiries or quotations."}</div>`}</section>`;
+  $("#fshow").onclick = e => { const b = e.target.closest("[data-v]"); if (b) { followFilter.show = b.dataset.v; renderFollowups(main); } };
+  main.querySelectorAll("[data-ff]").forEach(t => t.onclick = () => { followFilter.show = t.dataset.ff; renderFollowups(main); });
+}
+const OUTCOMES = ["No reply", "Interested – thinking", "Wants changes / discount", "Call back later", "Asked for documents", "Not interested"];
+function followForm(c) {
+  const tpls = local.settings.templates || [];
+  let ti = tpls.findIndex(t => c.stage === "Enquiry" ? /enquiry follow/i.test(t.name) : /quotation follow/i.test(t.name)); if (ti < 0) ti = 0;
+  const lastH = (c.history || []).slice(-3).reverse();
+  const nd = +local.settings.followUpDays || 3;
+  modal(`<h2>📞 Follow up – ${esc(shortName(c))}</h2>
+    <div class="hint">${esc(c.stage)}${c.quoteAmount ? " · " + money(c.quoteAmount) : ""}${c.service ? " · " + esc(c.service) : ""}${c.followUps ? " · followed up " + c.followUps + "× before" : ""}${quoteAge(c) != null && c.stage !== "Enquiry" ? " · quote sent " + quoteAge(c) + " days ago" : ""}</div>
+    ${lastH.length ? `<div class="detect" style="margin-top:10px">${lastH.map(h => `<div><span class="muted">${fmtWhen(h.at).split(",")[0]}:</span> ${esc(String(h.text).slice(0, 140))}</div>`).join("")}</div>` : ""}
+    <div class="stack" style="margin-top:12px">
+      ${tpls.length && c.phone ? `<label class="f"><span>WhatsApp message</span><div class="chips" id="fu_t">${tpls.map((t, i) => `<button data-i="${i}" class="${i === ti ? "on" : ""}">${esc(t.name)}</button>`).join("")}</div></label>
+        <textarea id="fu_text" style="min-height:110px">${esc(fillTemplate(tpls[ti].text, c))}</textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn wa" id="fu_wa">💬 Send on WhatsApp</button><a class="btn" href="tel:+${c.phone}" id="fu_call">📞 Call</a></div>` : `<div class="detect">No WhatsApp number – add one with ✏ Edit on the client's page.</div>`}
+      <label class="f"><span>What happened?</span><div class="chips" id="fu_o">${OUTCOMES.map(o => `<button data-o="${esc(o)}">${esc(o)}</button>`).join("")}</div></label>
+      <input type="text" id="fu_note" placeholder="Notes (optional) – e.g. will confirm after meeting partner on Sunday">
+      <label class="f"><span>Next follow-up</span><div class="chips" id="fu_n">${[[1, "Tomorrow"], [2, "2 days"], [3, "3 days"], [5, "5 days"], [7, "1 week"], [14, "2 weeks"], [30, "1 month"]].map(([n, l]) => `<button data-n="${n}" class="${n === nd ? "on" : ""}">${l}</button>`).join("")}</div></label>
+      <input type="date" id="fu_date" value="${addDays(today(), nd)}" style="max-width:200px">
+      <label class="f"><span>Move to stage (optional)</span><div class="chips" id="fu_s">${STAGES.filter(s => s !== c.stage).map(s => `<button data-s="${s}">${s}</button>`).join("")}</div></label>
+    </div>
+    <div class="mfoot"><button class="btn" data-act="mclose">Cancel</button><button class="btn primary" id="fu_save">Save follow-up</button></div>`);
+  let outcome = "", stage = "", channel = "";
+  const chips = (id, attr, set, toggle) => { const box = $(id); if (!box) return; box.onclick = e => { const b = e.target.closest("[" + attr + "]"); if (!b) return; const was = b.classList.contains("on");
+    box.querySelectorAll("button").forEach(x => x.classList.remove("on")); if (!(toggle && was)) b.classList.add("on"); set(toggle && was ? "" : b.getAttribute(attr)); }; };
+  chips("#fu_t", "data-i", v => { $("#fu_text").value = fillTemplate(tpls[+v].text, c); });
+  chips("#fu_o", "data-o", v => { outcome = v; if (v === "Not interested") { $("#fu_s").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.s === "Lost")); stage = "Lost"; } }, true);
+  chips("#fu_n", "data-n", v => { $("#fu_date").value = addDays(today(), +v); });
+  chips("#fu_s", "data-s", v => { stage = v; }, true);
+  const w = $("#fu_wa"); if (w) w.onclick = () => { window.open(waLink(c.phone, $("#fu_text").value), "_blank", "noopener"); channel = "WhatsApp"; w.textContent = "✔ WhatsApp opened"; };
+  const cl = $("#fu_call"); if (cl) cl.addEventListener("click", () => { channel = "Call"; });
+  $("#fu_save").onclick = () => {
+    c.followUps = (c.followUps || 0) + 1; c.lastFollowUpAt = nowIso();
+    const closed = stage === "Won" || stage === "Lost";
+    c.nextFollowUp = closed ? "" : ($("#fu_date").value || addDays(today(), nd));
+    const note = $("#fu_note").value.trim();
+    addHistory(c, channel === "WhatsApp" ? "whatsapp" : "followup", "📞 Follow-up #" + c.followUps + (channel ? " (" + channel + ")" : "") + (outcome ? ": " + outcome : "") + (note ? " – " + note : "") + (closed ? "" : "\nNext follow-up: " + fmtDate(c.nextFollowUp)));
+    put("clients", c); logAct("Follow-up", c, [channel, outcome, note].filter(String).join(" · "));
+    closeModal();
+    if (stage) setStage(c, stage); else { toast("Saved – next follow-up " + fmtDate(c.nextFollowUp)); render(); }
+  };
+}
 function fillPayTemplate(text, p) {
   const c = clientById(p.clientId) || { name: p.clientName };
   const d = p.dueDate ? Math.max(0, daysBetween(p.dueDate, today())) : 0;
-  return String(text).replace(/\{name\}/g, (c.name || c.company || "").split(" ")[0] || "Sir/Madam").replace(/\{company\}/g, local.settings.companyName || "")
+  const biz = p.biz || c.biz;
+  return String(text).replace(/\{name\}/g, (c.name || c.company || "").split(" ")[0] || "Sir/Madam").replace(/\{company\}/g, bizCompany(biz))
     .replace(/\{invoice\}/g, p.invoiceNo ? "invoice " + p.invoiceNo : "our invoice").replace(/\{description\}/g, p.description || "our services")
     .replace(/\{amount\}/g, money(p.amount)).replace(/\{balance\}/g, money(balanceOf(p))).replace(/\{due\}/g, fmtLong(p.dueDate)).replace(/\{days\}/g, d)
-    .replace(/\{bank\}/g, local.settings.bankDetails || "").replace(/\{me\}/g, me().name || "").replace(/\n{3,}/g, "\n\n").trim();
+    .replace(/\{bank\}/g, bizBank(biz)).replace(/\{me\}/g, me().name || "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function remindForm(p) {
   const c = clientById(p.clientId) || {};
@@ -644,6 +885,7 @@ function payForm(p, isNew) {
   modal(`<h2>${isNew ? "New invoice" : "Invoice"}</h2>
     ${!isNew ? `<div class="hint">${esc(payStatus(p).text)} · received ${money(paidOf(p))} of ${money(p.amount)}</div>` : `<div class="hint">Add an invoice you've sent. The CRM will remind you to chase it after the due date.</div>`}
     <div class="stack" style="margin-top:12px">
+      ${bizPicker("pf", p.biz)}
       <label class="f"><span>Client</span><select id="pf_client">${clientOptions(p.clientId, true)}</select></label>
       <div id="pf_new" class="row2" style="display:none"><label class="f"><span>New client name</span><input type="text" id="pf_nname"></label><label class="f"><span>WhatsApp number</span><input type="tel" id="pf_nphone"></label></div>
       <div class="row2 keep"><label class="f"><span>Amount (AED)</span><input type="text" inputmode="decimal" id="pf_amount" value="${esc(p.amount)}" placeholder="e.g. 3150"></label>
@@ -664,7 +906,7 @@ function payForm(p, isNew) {
       ${ed ? `<button class="btn primary" id="pf_save">${isNew ? "Add invoice" : "Save"}</button>` : ""}
     </div>`);
   const sel = $("#pf_client");
-  sel.onchange = () => { $("#pf_new").style.display = sel.value === "__new" ? "" : "none"; if (sel.value && sel.value !== "__new" && !$("#pf_desc").value) { const c = clientById(sel.value); if (c) { $("#pf_desc").value = c.service || ""; if (!$("#pf_amount").value && c.quoteAmount) $("#pf_amount").value = c.quoteAmount; } } };
+  sel.onchange = () => { $("#pf_new").style.display = sel.value === "__new" ? "" : "none"; const cc = clientById(sel.value); if (cc && cc.biz && isNew) setBizPicked("pf", cc.biz); if (sel.value && sel.value !== "__new" && !$("#pf_desc").value) { const c = clientById(sel.value); if (c) { $("#pf_desc").value = c.service || ""; if (!$("#pf_amount").value && c.quoteAmount) $("#pf_amount").value = c.quoteAmount; } } };
   $("#pf_terms").onclick = e => { const b = e.target.closest("[data-n]"); if (b) $("#pf_due").value = addDays($("#pf_issue").value || today(), +b.dataset.n); };
   const save = () => {
     const amount = num($("#pf_amount").value);
@@ -673,11 +915,11 @@ function payForm(p, isNew) {
     if (sel.value === "__new") {
       const nm = $("#pf_nname").value.trim(), ph = normPhone($("#pf_nphone").value);
       if (!nm && !ph) { toast("Enter the new client's name"); return false; }
-      c = (ph && local.clients.find(x => x.phone === ph)) || newClient({ name: nm, phone: ph, stage: "Won", source: "Existing client" });
+      c = (ph && local.clients.find(x => x.phone === ph)) || newClient({ name: nm, phone: ph, stage: "Won", source: "Existing client", biz: bizPicked("pf"), nextFollowUp: "" });
       if (!clientById(c.id)) { addHistory(c, "created", "Client added with an invoice"); put("clients", c); logAct("Client added", c, "With invoice"); }
     } else if (sel.value) c = clientById(sel.value);
     const was = JSON.stringify([p.amount, p.dueDate]);
-    Object.assign(p, { clientId: c ? c.id : "", clientName: c ? clientLabel(c) : "", amount: String(amount), invoiceNo: $("#pf_inv").value.trim(), description: $("#pf_desc").value.trim(),
+    Object.assign(p, { biz: bizPicked("pf"), clientId: c ? c.id : "", clientName: c ? clientLabel(c) : "", amount: String(amount), invoiceNo: $("#pf_inv").value.trim(), description: $("#pf_desc").value.trim(),
       issueDate: $("#pf_issue").value || today(), dueDate: $("#pf_due").value || $("#pf_issue").value || today(), repeat: $("#pf_rep").value, note: $("#pf_note").value.trim() });
     put("payments", p);
     logAct(isNew ? "Invoice added" : "Invoice edited", p, (p.clientName ? p.clientName + " · " : "") + money(p.amount) + (was !== JSON.stringify([p.amount, p.dueDate]) ? " · due " + p.dueDate : ""));
@@ -715,6 +957,7 @@ function recordPaymentForm(p) {
 function filteredClients() {
   const q = clientFilter.q.toLowerCase().trim(), qd = q.replace(/\D/g, "");
   return local.clients.filter(c => {
+    if (!inBizClient(c)) return false;
     if (clientFilter.stage === "open" && OPEN_STAGES.indexOf(c.stage) < 0) return false;
     if (clientFilter.stage === "owes" && clientBalance(c.id) <= 0) return false;
     if (STAGES.indexOf(clientFilter.stage) >= 0 && c.stage !== clientFilter.stage) return false;
@@ -745,7 +988,8 @@ function renderClients(main) {
         <div class="main" data-client="${c.id}"><div class="t">${esc(clientLabel(c))}</div>
           <div class="m"><span class="pill ${STAGE_PILL[c.stage]}">${esc(c.stage)}</span>${c.service ? `<span>${esc(c.service)}</span>` : ""}${owe > 0 ? `<span class="red" style="font-weight:600">owes ${money(owe)}</span>` : ""}
             ${di.length ? `<span class="${dm ? "amber" : "green"}">📄 ${di.length - dm}/${di.length} docs</span>` : ""}
-            ${t ? `<span>Next: ${esc(t.title)} – <b class="${d.cls}">${d.text}</b></span>` : OPEN_STAGES.indexOf(c.stage) >= 0 ? `<span class="amber" style="font-weight:600">No next step</span>` : ""}</div></div>
+            ${OPEN_STAGES.indexOf(c.stage) >= 0 && c.nextFollowUp ? `<span class="${c.nextFollowUp <= today() ? "red" : ""}" style="font-weight:600">📞 ${c.nextFollowUp < today() ? "follow-up late" : c.nextFollowUp === today() ? "follow up today" : "follow up " + fmtDate(c.nextFollowUp)}</span>` : ""}
+            ${t ? `<span>Next: ${esc(t.title)} – <b class="${d.cls}">${d.text}</b></span>` : OPEN_STAGES.indexOf(c.stage) >= 0 && !c.nextFollowUp ? `<span class="amber" style="font-weight:600">No next step</span>` : ""}${bizTag(c.biz)}</div></div>
         ${c.phone ? `<div class="btns hide-m"><a class="btn sm wa" href="${waLink(c.phone)}" target="_blank" rel="noopener">💬 Chat</a></div>` : ""}
       </div>`; }).join("") : `<div class="empty">No clients found.${can("edit") ? ` <button class="linkbtn" data-act="newclient">Add a client</button>` : ""}</div>`}</section>
     <div class="hint" style="margin-top:8px">${arr.length} shown</div>`;
@@ -756,7 +1000,7 @@ function renderClients(main) {
 }
 function renderPipeline(main) {
   const by = {}; STAGES.forEach(s => { by[s] = []; });
-  local.clients.forEach(c => { (by[c.stage] || by.Enquiry).push(c); });
+  local.clients.filter(inBizClient).forEach(c => { (by[c.stage] || by.Enquiry).push(c); });
   const ninety = addDays(today(), -90);
   const sum = arr => arr.reduce((s, c) => s + num(c.quoteAmount), 0);
   main.innerHTML = `<div class="head"><h1>Quotations</h1><button class="btn" data-nav="clients">👥 Client list</button>${can("edit") ? `<button class="btn primary" data-act="newclient">+ New enquiry</button>` : ""}
@@ -766,7 +1010,8 @@ function renderPipeline(main) {
       if (s === "Won" || s === "Lost") arr = arr.filter(c => (c.updatedAt || "").slice(0, 10) >= ninety);
       const v = sum(arr);
       return `<div class="col"><h4><span style="color:${STAGE_COLOR[s]}">${s}</span><span class="muted">${arr.length}${v ? " · " + money(v) : ""}</span></h4>
-        ${arr.slice(0, 100).map(c => `<div class="bcard" data-client="${c.id}"><b>${esc(clientLabel(c))}</b><div class="s">${esc([c.service, c.quoteAmount ? money(c.quoteAmount) : ""].filter(String).join(" · "))}</div></div>`).join("") || `<div class="hint" style="padding:6px">None</div>`}</div>`;
+        ${arr.slice(0, 100).map(c => { const qa = quoteAge(c); return `<div class="bcard" data-client="${c.id}"><b>${esc(clientLabel(c))}</b><div class="s">${esc([c.service, c.quoteAmount ? money(c.quoteAmount) : ""].filter(String).join(" · "))}</div>
+          ${OPEN_STAGES.indexOf(s) >= 0 ? `<div class="s">${qa != null && s !== "Enquiry" ? "sent " + qa + "d ago · " : ""}<span class="${needsFollow(c) ? "red" : ""}">📞 ${c.nextFollowUp ? (c.nextFollowUp <= today() ? "follow up now" : fmtDate(c.nextFollowUp)) : "no date"}</span></div>` : ""}${bizTag(c.biz)}</div>`; }).join("") || `<div class="hint" style="padding:6px">None</div>`}</div>`;
     }).join("")}</div>`;
 }
 async function renderActivity(main) {
@@ -785,8 +1030,8 @@ async function renderActivity(main) {
 /* ===================== client panel ===================== */
 function waLink(phone, text) { return "https://wa.me/" + phone + (text ? "?text=" + encodeURIComponent(text) : ""); }
 function fillTemplate(text, c) {
-  return String(text).replace(/\{name\}/g, (c.name || "").split(" ")[0] || "there").replace(/\{fullname\}/g, c.name || "").replace(/\{company\}/g, local.settings.companyName || "")
-    .replace(/\{service\}/g, c.service || "your requirement").replace(/\{amount\}/g, c.quoteAmount ? money(c.quoteAmount) : "").replace(/\{me\}/g, me().name || "").replace(/\{bank\}/g, local.settings.bankDetails || "")
+  return String(text).replace(/\{name\}/g, (c.name || "").split(" ")[0] || "there").replace(/\{fullname\}/g, c.name || "").replace(/\{company\}/g, bizCompany(c.biz))
+    .replace(/\{service\}/g, c.service || "your requirement").replace(/\{amount\}/g, c.quoteAmount ? money(c.quoteAmount) : "").replace(/\{me\}/g, me().name || "").replace(/\{bank\}/g, bizBank(c.biz))
     .replace(/\{documents\}/g, docsText(c) || "(we have everything we need – thank you!)");
 }
 function docSection(c) {
@@ -807,7 +1052,7 @@ function docSection(c) {
 }
 function docRequestForm(c) {
   const tpl = (local.settings.templates || []).find(t => /\{documents\}/.test(t.text));
-  const text = fillTemplate(tpl ? tpl.text : DEFAULT_SETTINGS.templates[3].text, c);
+  const text = fillTemplate(tpl ? tpl.text : DEFAULT_SETTINGS.templates.find(t => /\{documents\}/.test(t.text)).text, c);
   modal(`<h2>💬 Ask for documents</h2><div class="hint">${esc(clientLabel(c))} · ${missingDocs(c).length} missing</div>
     <div class="stack" style="margin-top:12px">
       <label class="f"><span>Message (you can edit it)</span><textarea id="dr_text" style="min-height:220px">${esc(text)}</textarea></label>
@@ -871,7 +1116,11 @@ function renderDrawer() {
     <div class="db">
       <section class="sec"><header><h2>Stage</h2>${c.quoteAmount ? `<span class="muted">Quote ${money(c.quoteAmount)}</span>` : ""}</header>
         <div class="stages">${STAGES.map(s => `<button ${ed ? "" : "disabled"} data-stage="${s}" class="${c.stage === s ? "on" : ""}" style="${c.stage === s ? "background:" + STAGE_COLOR[s] : ""}">${s}</button>`).join("")}</div>
-        ${c.stage === "Lost" && c.lostReason ? `<div class="hint" style="padding:0 16px 12px">Lost reason: ${esc(c.lostReason)}</div>` : ""}</section>
+        ${c.stage === "Lost" && c.lostReason ? `<div class="hint" style="padding:0 16px 12px">Lost reason: ${esc(c.lostReason)}</div>` : ""}
+        ${OPEN_STAGES.indexOf(c.stage) >= 0 ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 16px 14px">
+          <span style="flex:1;min-width:180px" class="${needsFollow(c) ? "red" : ""}"><b>📞 Next follow-up:</b> ${c.nextFollowUp ? (c.nextFollowUp === today() ? "today" : c.nextFollowUp < today() ? fmtDate(c.nextFollowUp) + " (late)" : fmtDate(c.nextFollowUp)) : "not set"}${c.followUps ? ` <span class="muted">· done ${c.followUps}×</span>` : ""}</span>
+          ${ed ? `<button class="btn sm wa" data-follow="${c.id}">📞 Follow up now</button>` : ""}</div>` : ""}
+        ${multiBiz() ? `<div class="hint" style="padding:0 16px 12px">🏢 ${esc(bizName(c.biz) || "No company set")}</div>` : ""}</section>
 
       <section class="sec"><header><h2>✅ Tasks</h2>${ed ? `<button class="btn sm" data-act="clienttask">+ Task</button>` : ""}</header>
         ${listOf(openT, taskItem, { noClient: true }) || `<div class="empty">${OPEN_STAGES.indexOf(c.stage) >= 0 ? "No next step yet – add a task so you're reminded." : "No open tasks."}</div>`}
@@ -913,6 +1162,9 @@ function setStage(c, s) {
   if (c.stage === s) return;
   const apply = reason => {
     const from = c.stage; c.stage = s; if (s === "Lost") c.lostReason = reason || "";
+    if (s === "Won" || s === "Lost") c.nextFollowUp = "";
+    else if (s === "Quotation sent") c.nextFollowUp = addDays(today(), +local.settings.followUpDays || 3);
+    else if (!c.nextFollowUp) c.nextFollowUp = addDays(today(), 1);
     addHistory(c, "stage", "Stage: " + from + " → " + s + (reason ? " (" + reason + ")" : ""));
     put("clients", c); logAct("Stage changed", c, from + " → " + s);
     render();
@@ -920,8 +1172,7 @@ function setStage(c, s) {
       const open = local.tasks.filter(t => !t.done && t.clientId === c.id && /quot|follow/i.test(t.title));
       if (open.length && confirm("Mark " + open.length + " open follow-up task(s) for this client as done?")) open.forEach(t => completeTask(t, true));
     }
-    if (s === "Quotation sent" && !local.tasks.some(t => !t.done && t.clientId === c.id))
-      taskForm(newTask({ title: "Follow up on quotation – " + shortName(c), dueDate: addDays(today(), 3), clientId: c.id, clientName: clientLabel(c), assignedTo: c.assignedTo || "" }), true, "Quotation sent 👍  When should I remind you to follow up?");
+    if (s === "Quotation sent") toast("Quotation sent 👍  I'll remind you to follow up on " + fmtDate(c.nextFollowUp));
     else if (s === "Won") {
       modal(`<h2>🎉 Won!</h2><p>Do you want to add the invoice now, so you're reminded if it isn't paid?</p>
         <div class="mfoot"><button class="btn" data-act="mclose">Not now</button><button class="btn primary" id="won_inv">Add invoice${c.quoteAmount ? " (" + money(c.quoteAmount) + ")" : ""}</button></div>`);
@@ -949,6 +1200,7 @@ function clientForm(c, isNew, after) {
   const staff = staffNames();
   modal(`<h2>${isNew ? "New client / enquiry" : "Edit client"}</h2>
     <div class="stack" style="margin-top:12px">
+      ${bizPicker("cf", c.biz)}
       <div class="row2"><label class="f"><span>Name</span><input type="text" id="cf_name" value="${esc(c.name)}" placeholder="Contact person"></label>
         <label class="f"><span>Company</span><input type="text" id="cf_company" value="${esc(c.company)}"></label></div>
       <div class="row2"><label class="f"><span>WhatsApp / phone</span><input type="tel" id="cf_phone" value="${esc(c.phone ? "+" + c.phone : "")}" placeholder="050 123 4567"></label>
@@ -960,12 +1212,17 @@ function clientForm(c, isNew, after) {
       <div class="row2"><label class="f"><span>TRN (optional)</span><input type="text" id="cf_trn" value="${esc(c.trn)}"></label>
         ${staff.length ? `<label class="f"><span>Handled by</span><select id="cf_who"><option value="">–</option>${staff.map(n => opt(n, c.assignedTo)).join("")}</select></label>` : "<span></span>"}</div>
       <label class="f"><span>Notes</span><textarea id="cf_notes">${esc(c.notes)}</textarea></label>
-      ${isNew ? `<label class="switch"><input type="checkbox" id="cf_task" checked><span>Remind me to follow up on <input type="date" id="cf_taskdate" value="${addDays(today(), 1)}" style="width:auto;display:inline-block;min-height:34px;padding:4px 8px"></span></label>` : ""}
+      <label class="f" id="cf_fuwrap"><span>📞 Next follow-up</span><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="date" id="cf_fu" value="${esc(c.nextFollowUp || "")}" style="width:auto">
+        <div class="chips" id="cf_fuq">${[[1, "Tomorrow"], [3, "3 days"], [7, "1 week"]].map(([n, l]) => `<button type="button" data-n="${n}">${l}</button>`).join("")}</div></div></label>
       <div id="cf_dup" class="hint"></div>
     </div>
     <div class="mfoot"><button class="btn" data-act="mclose">Cancel</button><button class="btn primary" id="cf_save">${isNew ? "Add" : "Save"}</button></div>`);
   let stage = c.stage;
-  $("#cf_stage").onclick = e => { const b = e.target.closest("[data-s]"); if (!b) return; stage = b.dataset.s; $("#cf_stage").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); };
+  const fuShow = () => { $("#cf_fuwrap").style.display = OPEN_STAGES.indexOf(stage) >= 0 ? "" : "none"; };
+  $("#cf_stage").onclick = e => { const b = e.target.closest("[data-s]"); if (!b) return; stage = b.dataset.s; $("#cf_stage").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    if (stage === "Quotation sent" && (!$("#cf_fu").value || $("#cf_fu").value <= today())) $("#cf_fu").value = addDays(today(), +local.settings.followUpDays || 3); fuShow(); };
+  $("#cf_fuq").onclick = e => { const b = e.target.closest("[data-n]"); if (b) $("#cf_fu").value = addDays(today(), +b.dataset.n); };
+  fuShow();
   const dupCheck = () => { const p = normPhone($("#cf_phone").value), d = p && local.clients.find(x => x.phone === p && x.id !== c.id);
     $("#cf_dup").innerHTML = d ? `⚠ This number already belongs to <a href="#" data-client="${d.id}">${esc(clientLabel(d))}</a>.` : ""; };
   $("#cf_phone").oninput = dupCheck; dupCheck();
@@ -973,17 +1230,15 @@ function clientForm(c, isNew, after) {
     const name = $("#cf_name").value.trim(), company = $("#cf_company").value.trim(), phone = normPhone($("#cf_phone").value);
     if (!name && !company && !phone) { toast("Enter at least a name, company or phone"); return; }
     const fromStage = c.stage;
-    Object.assign(c, { name, company, phone, email: $("#cf_email").value.trim(), service: $("#cf_service").value, quoteAmount: $("#cf_quote").value.trim(),
-      source: $("#cf_source").value, trn: $("#cf_trn").value.trim(), notes: $("#cf_notes").value.trim() });
+    Object.assign(c, { biz: bizPicked("cf"), name, company, phone, email: $("#cf_email").value.trim(), service: $("#cf_service").value, quoteAmount: $("#cf_quote").value.trim(),
+      source: $("#cf_source").value, trn: $("#cf_trn").value.trim(), notes: $("#cf_notes").value.trim(), nextFollowUp: OPEN_STAGES.indexOf(stage) >= 0 ? $("#cf_fu").value : "" });
     if ($("#cf_who")) c.assignedTo = $("#cf_who").value;
     if (isNew) { c.stage = stage; addHistory(c, "created", "Added" + (c.source ? " (" + c.source + ")" : "")); }
     else if (stage !== fromStage) { c.stage = stage; addHistory(c, "stage", "Stage: " + fromStage + " → " + stage); }
     put("clients", c);
     logAct(isNew ? "Client added" : "Client edited", c, c.stage + (c.quoteAmount ? " · " + money(c.quoteAmount) : ""));
-    const mk = isNew && $("#cf_task") && $("#cf_task").checked ? $("#cf_taskdate").value : "";
     closeModal();
-    if (mk) { const t = newTask({ title: (c.stage === "Quotation sent" ? "Follow up on quotation – " : c.stage === "Enquiry" ? "Send quotation to " : "Follow up with ") + shortName(c), dueDate: mk, clientId: c.id, clientName: clientLabel(c), assignedTo: c.assignedTo || "" }); put("tasks", t); logAct("Task added", t, clientLabel(c)); }
-    toast(isNew ? "Added" + (mk ? " – reminder set for " + fmtDate(mk) : "") : "Saved");
+    toast((isNew ? "Added" : "Saved") + (c.nextFollowUp ? " – follow-up " + fmtDate(c.nextFollowUp) : ""));
     if (after) after(c); else { render(); openClient(c.id); }
   };
 }
@@ -993,6 +1248,7 @@ function taskForm(t, isNew, intro) {
   modal(`<h2>${isNew ? "New task" : "Task"}</h2>
     ${intro ? `<p class="hint" style="margin:0">${esc(intro)}</p>` : ""}
     <div class="stack" style="margin-top:12px">
+      ${bizPicker("tf", t.biz)}
       <label class="f"><span>What needs doing?</span><input type="text" id="tf_title" value="${esc(t.title)}" ${ed ? "" : "disabled"} placeholder="e.g. Send quotation"></label>
       <label class="f"><span>When?</span><div class="chips" id="tf_q">${[["Today", 0], ["Tomorrow", 1], ["In 3 days", 3], ["Next week", 7], ["No date", null]].map(([l, n]) => { const v = n == null ? "" : addDays(today(), n); return `<button type="button" data-qd="${v}" class="${t.dueDate === v ? "on" : ""}">${l}</button>`; }).join("")}</div></label>
       <div class="row2 keep"><label class="f"><span>Date</span><input type="date" id="tf_date" value="${esc(t.dueDate)}"></label>
@@ -1017,7 +1273,7 @@ function taskForm(t, isNew, intro) {
     const title = $("#tf_title").value.trim();
     if (!title) { toast("Please write what needs doing"); return false; }
     const cid = $("#tf_client").value, c = cid && clientById(cid);
-    Object.assign(t, { title, dueDate: $("#tf_date").value, dueTime: $("#tf_time").value, repeat: $("#tf_rep").value, clientId: cid, clientName: c ? clientLabel(c) : "", note: $("#tf_note").value.trim() });
+    Object.assign(t, { biz: bizPicked("tf"), title, dueDate: $("#tf_date").value, dueTime: $("#tf_time").value, repeat: $("#tf_rep").value, clientId: cid, clientName: c ? clientLabel(c) : "", note: $("#tf_note").value.trim() });
     if ($("#tf_who")) t.assignedTo = $("#tf_who").value;
     if (t.repeat && !t.dueDate) t.dueDate = today();
     put("tasks", t);
@@ -1112,6 +1368,8 @@ function addMenu() {
     <button data-act="fromwa"><i>💬</i><b>From WhatsApp</b><span>Turn a client's message into a task</span></button>
     <button data-act="newclient"><i>👤</i><b>Client / enquiry</b><span>A new lead or client</span></button>
     <button data-act="newpay"><i>💰</i><b>Invoice</b><span>So you're reminded to collect it</span></button>
+    <button data-act="newbill"><i>🧾</i><b>Bill to pay</b><span>Rent, DEWA, supplier, subscription…</span></button>
+    <button data-nav="followups"><i>📞</i><b>Follow-ups</b><span>Leads & quotations to chase</span></button>
   </div><div class="mfoot"><button class="btn" data-act="mclose">Cancel</button></div>`);
 }
 
@@ -1131,12 +1389,21 @@ function renderSettings(main) {
       <div><b>🔔 Pop-up reminders</b><div class="hint">${!("Notification" in window) ? "Not supported in this browser." : Notification.permission === "granted" ? "On." : Notification.permission === "denied" ? "Blocked – allow notifications for this site in the browser's address bar." : `<button class="btn sm" data-act="notif">Turn on</button>`}</div></div>
     </div>
 
-    ${can("settings") ? `<div class="card stack"><h2>🏢 Company</h2>
+    ${can("settings") ? `<div class="card stack"><h2>🏢 Your companies</h2>
+      <div class="hint">Each client, task, invoice and bill belongs to one of these. Use the switcher at the top to see one company or all. In WhatsApp messages, <b>{company}</b> and <b>{bank}</b> use the client's company.</div>
+      <div id="bizlist">${bizList().map((b, i) => bizEditor(i, b)).join("")}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-act="addbiz">+ Add company</button><button class="btn primary" data-act="savebiz">Save companies</button></div>
+      <div class="hint">Clear a company's name and save to remove it (its records stay, shown under All companies).</div></div>
+
+    <div class="card stack"><h2>⚙️ General</h2>
       <label class="f"><span>Company name</span><input type="text" id="s_company" value="${esc(s.companyName)}"></label>
       <label class="f"><span>CRM web address (for links in emails)</span><input type="url" id="s_appurl" value="${esc(s.appUrl)}" placeholder="https://yourname.github.io/crm/"></label>
       <label class="f"><span>Bank details (added to payment reminders as {bank})</span><textarea id="s_bank" placeholder="Bank: …&#10;Account name: …&#10;IBAN: AE…">${esc(s.bankDetails)}</textarea></label>
       <label class="f"><span>Remind me to chase unpaid invoices every</span><select id="s_every">${[3, 5, 7, 10, 14, 30].map(n => opt(String(n), String(s.remindEvery || 7), n + " days")).join("")}</select></label>
-      <details><summary class="hint" style="cursor:pointer">Lists: services, sources, lost reasons</summary><div class="stack" style="margin-top:10px">
+      <label class="f"><span>After sending a quotation, remind me to follow up in</span><select id="s_fud">${[1, 2, 3, 5, 7].map(n => opt(String(n), String(s.followUpDays || 3), n + (n === 1 ? " day" : " days"))).join("")}</select></label>
+      <label class="f"><span>Remind me about bills to pay</span><select id="s_bill">${[1, 2, 3, 5, 7].map(n => opt(String(n), String(s.billRemindDays || 3), n + (n === 1 ? " day" : " days") + " before they're due")).join("")}</select></label>
+      <details><summary class="hint" style="cursor:pointer">Lists: services, sources, lost reasons, bill types</summary><div class="stack" style="margin-top:10px">
+        <label class="f"><span>Bill / expense types (one per line)</span><textarea id="s_exp" style="min-height:120px">${esc((s.expenseCategories || []).join("\n"))}</textarea></label>
         <label class="f"><span>Services (one per line)</span><textarea id="s_services" style="min-height:120px">${esc(s.services.join("\n"))}</textarea></label>
         <label class="f"><span>How clients find you (one per line)</span><textarea id="s_sources">${esc(s.sources.join("\n"))}</textarea></label>
         <label class="f"><span>Lost reasons (one per line)</span><textarea id="s_lost">${esc(s.lostReasons.join("\n"))}</textarea></label></div></details>
@@ -1192,6 +1459,12 @@ function renderSettings(main) {
   const mn = $("#s_myname"); if (mn) mn.onchange = () => { local.settings.myName = mn.value.trim(); persist(); render(); };
 }
 const tplEditor = (k, i, t) => `<div class="stack" style="border-bottom:1px solid var(--border);padding-bottom:10px;gap:6px"><input type="text" data-${k}n="${i}" value="${esc(t ? t.name : "")}" placeholder="Name"><textarea data-${k}t="${i}" placeholder="Hello {name}, …">${esc(t ? t.text : "")}</textarea></div>`;
+const bizEditor = (i, b) => `<div class="stack" style="border-bottom:1px solid var(--border);padding-bottom:12px;gap:6px">
+  <input type="hidden" data-bzid="${i}" value="${esc(b ? b.id : "")}">
+  <div style="display:flex;gap:6px"><input type="color" data-bzc="${i}" value="${esc(b ? b.color || "#64748b" : "#64748b")}" style="width:46px;min-height:42px;padding:2px;border:1px solid var(--border);border-radius:10px;background:var(--surface)" title="Colour">
+    <input type="text" data-bzn="${i}" value="${esc(b ? b.name : "")}" placeholder="Full company name"></div>
+  <input type="text" data-bzs="${i}" value="${esc(b ? b.short : "")}" placeholder="Short name for labels, e.g. Netwave">
+  <textarea data-bzb="${i}" style="min-height:60px" placeholder="Bank details for this company's payment reminders (optional)">${esc(b ? b.bank || "" : "")}</textarea></div>`;
 const docListEditor = (i, l) => `<div class="stack" style="border-bottom:1px solid var(--border);padding-bottom:10px;gap:6px"><input type="text" data-dln="${i}" value="${esc(l ? l.name : "")}" placeholder="Checklist name – same as the service, e.g. VAT registration"><textarea data-dli="${i}" style="min-height:150px" placeholder="One document per line">${esc(l ? l.items.join("\n") : "")}</textarea></div>`;
 
 /* ===================== import clients from Excel / CSV ===================== */
@@ -1433,20 +1706,25 @@ function csv(rows) { return "﻿" + rows.map(r => r.map(v => { v = String(v == n
 function exportCsv(name, rows, what) { downloadFile(name + "-" + today() + ".csv", csv(rows), "text/csv;charset=utf-8"); logAct("Exported " + what, null, (rows.length - 1) + " rows"); persist(); schedulePush(); }
 function exportClients() {
   const nt = {}; local.tasks.filter(t => !t.done && t.clientId).sort(byDue).forEach(t => { if (!nt[t.clientId]) nt[t.clientId] = t; });
-  exportCsv("clients", [["Name", "Company", "Phone", "Email", "TRN", "Service", "Stage", "Quotation (AED)", "Owes (AED)", "Source", "Handled by", "Lost reason", "Next task", "Next task due", "Added", "Last updated", "Notes"]]
-    .concat(local.clients.map(c => [c.name, c.company, fmtPhone(c.phone), c.email, c.trn, c.service, c.stage, c.quoteAmount, clientBalance(c.id) || "", c.source, c.assignedTo, c.lostReason,
+  exportCsv("clients", [["Our company", "Name", "Company", "Phone", "Email", "TRN", "Service", "Stage", "Quotation (AED)", "Owes (AED)", "Next follow-up", "Follow-ups done", "Source", "Handled by", "Lost reason", "Next task", "Next task due", "Added", "Last updated", "Notes"]]
+    .concat(local.clients.filter(inBizClient).map(c => [bizName(c.biz), c.name, c.company, fmtPhone(c.phone), c.email, c.trn, c.service, c.stage, c.quoteAmount, clientBalance(c.id) || "", c.nextFollowUp || "", c.followUps || "", c.source, c.assignedTo, c.lostReason,
       nt[c.id] ? nt[c.id].title : "", nt[c.id] ? nt[c.id].dueDate : "", (c.createdAt || "").slice(0, 10), (c.updatedAt || "").slice(0, 10), c.notes])), "clients");
 }
 function exportTasks() {
-  exportCsv("tasks", [["Task", "Client", "Due date", "Time", "Status", "Who", "Repeat", "Created", "Created by", "Done at", "Notes"]]
-    .concat(local.tasks.slice().sort(byDue).map(t => [t.title, t.clientName, t.dueDate, t.dueTime, t.done ? "Done" : "Open", t.assignedTo, REPEATS[t.repeat || ""], (t.createdAt || "").slice(0, 10), t.createdBy, (t.doneAt || "").slice(0, 16).replace("T", " "), t.note])), "tasks");
+  exportCsv("tasks", [["Company", "Task", "Client", "Due date", "Time", "Status", "Who", "Repeat", "Created", "Created by", "Done at", "Notes"]]
+    .concat(local.tasks.filter(inBiz).slice().sort(byDue).map(t => [bizName(t.biz), t.title, t.clientName, t.dueDate, t.dueTime, t.done ? "Done" : "Open", t.assignedTo, REPEATS[t.repeat || ""], (t.createdAt || "").slice(0, 10), t.createdBy, (t.doneAt || "").slice(0, 16).replace("T", " "), t.note])), "tasks");
 }
 function exportPayments() {
-  exportCsv("payments", [["Client", "For", "Invoice no.", "Invoice date", "Due date", "Amount (AED)", "Received (AED)", "Balance (AED)", "Status", "Reminders sent", "Last reminder", "Repeat", "Notes"]]
-    .concat(local.payments.slice().sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || "")).map(p => [p.clientName, p.description, p.invoiceNo, p.issueDate, p.dueDate, num(p.amount), paidOf(p), balanceOf(p), payStatus(p).text,
+  exportCsv("payments", [["Company", "Client", "For", "Invoice no.", "Invoice date", "Due date", "Amount (AED)", "Received (AED)", "Balance (AED)", "Status", "Reminders sent", "Last reminder", "Repeat", "Notes"]]
+    .concat(local.payments.filter(inBiz).slice().sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || "")).map(p => [bizName(p.biz), p.clientName, p.description, p.invoiceNo, p.issueDate, p.dueDate, num(p.amount), paidOf(p), balanceOf(p), payStatus(p).text,
       (p.reminders || []).length, (p.lastReminderAt || "").slice(0, 10), REPEATS[p.repeat || ""], p.note])), "payments");
 }
-function backup() { downloadFile("crm-backup-" + today() + ".json", JSON.stringify({ app: "consultancy-crm", at: nowIso(), clients: local.clients, tasks: local.tasks, payments: local.payments, settings: local.settings }, null, 1), "application/json"); }
+function exportBills() {
+  exportCsv("bills", [["Company", "Pay to", "Type", "For", "Reference", "Due date", "Amount (AED)", "Status", "Paid on", "Paid (AED)", "How", "Repeat", "Notes"]]
+    .concat(local.bills.filter(inBiz).slice().sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || "")).map(b => [bizName(b.biz), b.vendor, b.category, b.description, b.reference, b.dueDate, num(b.amount),
+      b.paidAt ? "Paid" : "To pay", (b.paidAt || "").slice(0, 10), b.paidAt ? num(b.paidAmount || b.amount) : "", b.paidMethod, REPEATS[b.repeat || ""], b.note])), "bills");
+}
+function backup() { downloadFile("crm-backup-" + today() + ".json", JSON.stringify({ app: "consultancy-crm", at: nowIso(), clients: local.clients, tasks: local.tasks, payments: local.payments, bills: local.bills, settings: local.settings }, null, 1), "application/json"); }
 function restore(file) {
   if (!file) return;
   const fr = new FileReader();
@@ -1454,7 +1732,7 @@ function restore(file) {
     try {
       const d = JSON.parse(fr.result);
       if (d.app !== "consultancy-crm") throw new Error("Not a CRM backup file");
-      d.payments = d.payments || [];
+      KINDS.forEach(k => { d[k] = d[k] || []; });
       if (!confirm("Restore " + d.clients.length + " clients, " + d.tasks.length + " tasks and " + d.payments.length + " invoices? Records with the same ID are replaced.")) return;
       KINDS.forEach(k => d[k].forEach(x => put(k, x)));
       if (d.settings) saveSettings(d.settings, true);
@@ -1487,6 +1765,21 @@ function loadDemo() {
     reminders: [{ at: new Date(Date.now() - 12 * 864e5).toISOString(), by: "Me", channel: "WhatsApp" }], lastReminderAt: new Date(Date.now() - 12 * 864e5).toISOString(), nextReminder: addDays(td, -5) });
   P({ clientId: c.id, clientName: clientLabel(c), description: "VAT registration", invoiceNo: "INV-1029", amount: "2100", issueDate: addDays(td, -70), dueDate: addDays(td, -63), payments: [{ id: uid(), date: addDays(td, -60), amount: "2100", method: "Cheque" }] });
   P({ clientId: a.id, clientName: clientLabel(a), description: "Advance – CT registration", invoiceNo: "INV-1045", amount: "1750", issueDate: addDays(td, -2), dueDate: addDays(td, 5) });
+  // spread sample data across the three companies, and give open leads follow-up dates
+  const ids = bizList().map(x => x.id);
+  if (ids.length) {
+    const pick = c => /software|erp/i.test(c.service) ? ids[0] : /audit|company formation/i.test(c.service) && ids[2] ? ids[2] : ids[1] || ids[0];
+    local.clients.forEach(c => { if (c.demo) c.biz = pick(c); });
+    local.tasks.concat(local.payments).forEach(x => { if (x.demo) x.biz = (clientById(x.clientId) || {}).biz || ids[0]; });
+  }
+  const fu = { "Ahmed Al Mansoori": addDays(td, -1), "Omar Haddad": td, "Fatima Khan": addDays(td, 2) };
+  local.clients.forEach(c => { if (c.demo) { c.nextFollowUp = fu[c.name] || ""; if (c.name === "Ahmed Al Mansoori") c.followUps = 1; } });
+  const B = o => local.bills.push(newBill(Object.assign({ demo: true }, o)));
+  B({ biz: ids[1], vendor: "Landlord – Al Barsha office", category: "Rent", description: "Office rent – cheque 3 of 4", amount: "18500", dueDate: addDays(td, 2), repeat: "quarterly" });
+  B({ biz: ids[1], vendor: "DEWA", category: "DEWA / utilities", amount: "1240", dueDate: addDays(td, -1), repeat: "monthly", reference: "2004587713" });
+  B({ biz: ids[2] || ids[0], vendor: "Tech Distribution LLC", category: "Supplier / purchase", description: "10 × laptops – PO 2291", amount: "32400", dueDate: addDays(td, 9) });
+  B({ biz: ids[0], vendor: "Microsoft 365", category: "Software subscriptions", amount: "460", dueDate: addDays(td, 1), repeat: "monthly" });
+  B({ biz: ids[1], vendor: "Federal Tax Authority", category: "VAT payment to FTA", description: "VAT return Q3", amount: "7850", dueDate: addDays(td, 14), repeat: "quarterly" });
   KINDS.forEach(k => local[k].forEach(x => { x.updatedAt = x.updatedAt || nowIso(); }));
   persist(); toast("Sample data loaded"); go("home");
 }
@@ -1506,7 +1799,7 @@ function checkReminders() {
   if (!local.notified["digest" + td] && now.getHours() >= 8) {
     local.notified["digest" + td] = td;
     const k = counts();
-    if (k.tasksDue || k.chase) try { new Notification("📅 Today: " + k.tasksDue + " task(s), " + k.chase + " payment(s) to chase", { body: "Open the CRM to see them.", tag: "digest" }); } catch (e) {}
+    if (k.tasksDue || k.chase || k.follow || k.bills) try { new Notification("📅 Today: " + [k.tasksDue + " task(s)", k.follow + " follow-up(s)", k.chase + " payment(s) to chase", k.bills + " bill(s) to pay"].filter(x => x[0] !== "0").join(", "), { body: "Open the CRM to see them.", tag: "digest" }); } catch (e) {}
   }
   Object.keys(local.notified).forEach(k => { if (local.notified[k] < td) delete local.notified[k]; });
   persist();
@@ -1514,6 +1807,18 @@ function checkReminders() {
 
 /* ===================== events ===================== */
 document.addEventListener("click", e => {
+  const bz = e.target.closest("[data-b]");
+  if (bz && bz.parentElement && /_biz$/.test(bz.parentElement.id || "")) { setBizPicked(bz.parentElement.id.replace(/_biz$/, ""), bz.dataset.b); return; }
+  const fx = e.target.closest("[data-follow],[data-followlater],[data-editbill],[data-paybill],[data-billlater]");
+  if (fx) {
+    const d = fx.dataset;
+    if (d.follow) { const c = clientById(d.follow); if (c) followForm(c); }
+    if (d.followlater) { const c = clientById(d.followlater); if (c) { c.nextFollowUp = addDays(today(), 1); put("clients", c); logAct("Follow-up moved", c, "→ " + c.nextFollowUp); toast("Follow-up moved to tomorrow"); render(); } }
+    if (d.editbill) { const b = local.bills.find(x => x.id === d.editbill); if (b) billForm(b, false); }
+    if (d.paybill) { const b = local.bills.find(x => x.id === d.paybill); if (b) payBillForm(b); }
+    if (d.billlater) { const b = local.bills.find(x => x.id === d.billlater); if (b) { b.snoozedTo = addDays(today(), 1); put("bills", b); toast("I'll remind you again tomorrow"); render(); } }
+    return;
+  }
   const el = e.target.closest("[data-nav],[data-act],[data-client],[data-edittask],[data-later],[data-done],[data-followup],[data-stage],[data-note],[data-theme],[data-edituser],[data-jump],[data-walog],[data-editpay],[data-remind],[data-recpay],[data-docrm]");
   if (!el) { if (e.target.id === "modal") closeModal(); return; }
   const d = el.dataset;
@@ -1558,6 +1863,8 @@ document.addEventListener("click", e => {
     case "fromwa": closeModal(); fromWhatsApp(); break;
     case "newclient": closeModal(); clientForm(null, true); break;
     case "newpay": closeModal(); payForm(newPayment(), true); break;
+    case "newbill": closeModal(); billForm(newBill(), true); break;
+    case "exportbills": exportBills(); break;
     case "hideintro": local.hideIntro = true; persist(); render(); break;
     case "showintro": local.hideIntro = false; persist(); go("home"); break;
     case "editclient": clientForm(c, false, () => { render(); renderDrawer(); }); break;
@@ -1570,7 +1877,14 @@ document.addEventListener("click", e => {
       logAct("Client deleted", c, ""); remove("clients", c.id); closeDrawer(); render(); } break;
     case "notif": if ("Notification" in window) Notification.requestPermission().then(p => { toast(p === "granted" ? "Pop-up reminders are on" : "Notifications were not allowed"); render(); }); break;
     case "savesettings": saveSettings({ companyName: $("#s_company").value.trim() || "My Consultancy", appUrl: $("#s_appurl").value.trim(), bankDetails: $("#s_bank").value.trim(), remindEvery: +$("#s_every").value,
+      followUpDays: +$("#s_fud").value, billRemindDays: +$("#s_bill").value, expenseCategories: lines("#s_exp"),
       services: lines("#s_services"), sources: lines("#s_sources"), lostReasons: lines("#s_lost") }); break;
+    case "savebiz": {
+      const out = []; document.querySelectorAll("[data-bzn]").forEach(n => { const i = n.dataset.bzn, g = k => document.querySelector("[data-bz" + k + '="' + i + '"]').value.trim();
+        if (n.value.trim()) out.push({ id: g("id") || "b" + uid().slice(-5), name: n.value.trim(), short: g("s") || n.value.trim().split(" ").slice(0, 2).join(" "), color: g("c") || "#64748b", bank: g("b") }); });
+      if (local.biz && !out.some(b => b.id === local.biz)) local.biz = "";
+      saveSettings({ businesses: out }); break; }
+    case "addbiz": $("#bizlist").insertAdjacentHTML("beforeend", bizEditor($("#bizlist").children.length, null)); break;
     case "addtpl": $("#tpls").insertAdjacentHTML("beforeend", tplEditor("t", $("#tpls").children.length, null)); break;
     case "savetpl": {
       const read = k => { const out = []; document.querySelectorAll("[data-" + k + "n]").forEach(n => { const t = document.querySelector("[data-" + k + "t=\"" + n.getAttribute("data-" + k + "n") + "\"]").value.trim(); if (t) out.push({ name: n.value.trim() || "Message", text: t }); }); return out; };
