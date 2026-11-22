@@ -149,10 +149,30 @@ const bizList = () => (local.settings.businesses || []).filter(b => b && b.id &&
 const multiBiz = () => bizList().length > 1;
 const bizById = id => bizList().find(b => b.id === id);
 const bizName = id => { const b = bizById(id); return b ? b.name : ""; };
-const defaultBiz = () => local.biz || (bizList()[0] || {}).id || "";
-// records without a company show everywhere, so nothing is ever hidden by accident
-const inBiz = x => !local.biz || !x.biz || x.biz === local.biz;
-const inBizClient = c => !local.biz || !c.biz || c.biz === local.biz || local.payments.some(p => p.clientId === c.id && p.biz === local.biz) || local.tasks.some(t => t.clientId === c.id && t.biz === local.biz);
+const defaultBiz = () => bizById(local.biz) ? local.biz : (bizList()[0] || {}).id || "";
+// A company view shows only that company's records. Records with no company yet are listed under "No company yet".
+const NOBIZ = "__none";
+const hasBiz = x => !!(x.biz && bizById(x.biz));
+const inBiz = x => !local.biz || (local.biz === NOBIZ ? !hasBiz(x) : x.biz === local.biz);
+const inBizClient = c => !local.biz || (local.biz === NOBIZ ? !hasBiz(c) : c.biz === local.biz || local.payments.some(p => p.clientId === c.id && p.biz === local.biz) || local.tasks.some(t => t.clientId === c.id && t.biz === local.biz));
+const untaggedCount = () => multiBiz() ? KINDS.reduce((n, k) => n + local[k].filter(x => !hasBiz(x)).length, 0) : 0;
+const bizViewName = () => local.biz === NOBIZ ? "No company yet" : bizName(local.biz);
+function assignAllBiz(id) {
+  const n = untaggedCount();
+  if (!n || !confirm("Put all " + n + " records that have no company into " + bizName(id) + "?\n\nYou can still change any single one later with Edit.")) return;
+  const at = nowIso();
+  local.clients.forEach(c => { if (!hasBiz(c)) { c.biz = id; c.updatedAt = at; local.dirty.clients[c.id] = true; } });
+  ["tasks", "payments", "bills"].forEach(k => local[k].forEach(x => { if (!hasBiz(x)) { const c = x.clientId && clientById(x.clientId); x.biz = (c && c.biz) || id; x.updatedAt = at; local.dirty[k][x.id] = true; } }));
+  logAct("Company assigned", null, n + " records → " + bizName(id));
+  if (local.biz === NOBIZ) local.biz = id;
+  persist(); schedulePush(); toast(n + " records moved to " + bizName(id)); render();
+}
+function untaggedBanner() {
+  const n = untaggedCount(); if (!n || !can("edit")) return "";
+  return `<div class="card intro" style="border-left-color:var(--amber)"><b>⚠ ${n} record${n > 1 ? "s have" : " has"} no company yet</b>
+    <div class="hint" style="margin:4px 0 10px">These were added before you had three companies, so they only appear under <b>All companies</b> and <b>No company yet</b>. Put them all into one company now (you can change single ones later with ✏ Edit):</div>
+    <div class="chips">${bizList().map(b => `<button data-assignall="${esc(b.id)}" style="--bc:${esc(b.color || "#64748b")}"><span class="bdot"></span>All to ${esc(b.short || b.name)}</button>`).join("")}${local.biz !== NOBIZ ? `<button data-setbiz="${NOBIZ}">Show me them first</button>` : ""}</div></div>`;
+}
 function bizTag(id) {
   if (!multiBiz() || local.biz) return "";
   const b = bizById(id); if (!b) return "";
@@ -167,7 +187,7 @@ function bizPicked(idp) { const el = $("#" + idp + "_biz"); return el ? el.datas
 function setBizPicked(idp, id) { const el = $("#" + idp + "_biz"); if (!el) return; el.dataset.val = id; el.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === id)); }
 function bizSwitcher(cls) {
   if (!multiBiz()) return "";
-  return `<select class="${cls || "bizsel"}" id="${cls === "bizsel-m" ? "bizSelM" : "bizSel"}" title="Show one company or all"><option value="">🏢 All companies</option>${bizList().map(b => opt(b.id, local.biz || "", b.name)).join("")}</select>`;
+  return `<select class="${cls || "bizsel"}" id="${cls === "bizsel-m" ? "bizSelM" : "bizSel"}" title="Show one company or all"><option value="">🏢 All companies</option>${bizList().map(b => opt(b.id, local.biz || "", b.name)).join("")}${untaggedCount() || local.biz === NOBIZ ? opt(NOBIZ, local.biz || "", "⚠ No company yet (" + untaggedCount() + ")") : ""}${can("settings") ? `<option value="__edit">✏️ Rename / edit companies…</option>` : ""}</select>`;
 }
 
 /* payments */
@@ -434,7 +454,7 @@ function render() {
   const tb = (v, icon, label, n, also) => `<button data-nav="${v}" class="${view === v || (also || []).indexOf(view) >= 0 ? "active" : ""}"><span class="i">${icon}</span>${label}${n ? `<span class="n">${n}</span>` : ""}</button>`;
   root.innerHTML = `<div class="app">
     <aside class="nav">
-      <div class="brand"><img src="icon.svg" alt=""><div>${esc(local.biz ? bizName(local.biz) : local.settings.companyName)}<small>CRM</small></div></div>
+      <div class="brand"><img src="icon.svg" alt=""><div>${esc(local.biz ? bizViewName() : local.settings.companyName)}<small>CRM</small></div></div>
       ${bizSwitcher()}
       ${nb("home", "🏠", "Home", k.tasksDue + k.chase + k.follow + k.bills)}
       ${nb("tasks", "✅", "Tasks", k.tasksDue)}
@@ -462,7 +482,7 @@ function render() {
     ${tb("payments", "💰", "Money", 0, ["bills"])}
     ${tb("clients", "👥", "Clients", 0, ["pipeline"])}
   </nav>`;
-  ["#bizSel", "#bizSelM"].forEach(id => { const s = $(id); if (s) s.onchange = () => { local.biz = s.value; persist(); render(); toast(s.value ? "Showing " + bizName(s.value) : "Showing all companies"); }; });
+  ["#bizSel", "#bizSelM"].forEach(id => { const s = $(id); if (s) s.onchange = () => { if (s.value === "__edit") { go("settings"); const c = $("#bizlist"); if (c) { c.scrollIntoView({ block: "center" }); const f = c.querySelector("[data-bzn]"); if (f) f.focus(); } return; } local.biz = s.value; persist(); render(); window.scrollTo(0, 0); toast(s.value ? "Showing only: " + bizViewName() : "Showing all companies"); }; });
   VIEWS[view]($("#main"));
   document.title = (k.tasksLate ? "(" + k.tasksLate + ") " : "") + local.settings.companyName + " CRM";
   if (openClientId) renderDrawer();
@@ -529,8 +549,9 @@ function renderHome(main) {
   const doneToday = local.tasks.filter(t => t.done && (t.doneAt || "").slice(0, 10) === td && mineFilter(t) && inBiz(t)).length;
   const allClear = !late.length && !tod.length && !chase.length && !follow.length && !bills.length;
   main.innerHTML = `
-    <div class="head"><h1>${esc(hello)} 👋</h1><div class="sub">${fmtLong(td)}${local.biz ? " · " + esc(bizName(local.biz)) : ""} · ${allClear ? "Nothing urgent today 🎉" : "Here's what needs doing today"}${doneToday ? " · " + doneToday + " done so far" : ""}</div></div>
+    <div class="head"><h1>${esc(hello)} 👋</h1><div class="sub">${fmtLong(td)}${local.biz ? " · <b>" + esc(bizViewName()) + " only</b>" : ""} · ${allClear ? "Nothing urgent today 🎉" : "Here's what needs doing today"}${doneToday ? " · " + doneToday + " done so far" : ""}</div></div>
     ${introCard()}
+    ${untaggedBanner()}
     <div class="tiles four">
       <div class="tile ${late.length ? "red" : tod.length ? "amber" : "green"}" data-jump="sec-tasks"><div class="big">${late.length + tod.length}</div><div class="lbl">Tasks today</div><div class="s">${late.length ? late.length + " late" : "none late"}</div></div>
       <div class="tile ${follow.length ? "amber" : "green"}" data-jump="sec-follow"><div class="big">${follow.length}</div><div class="lbl">Follow-ups</div><div class="s">leads & quotations</div></div>
@@ -1390,7 +1411,7 @@ function renderSettings(main) {
     </div>
 
     ${can("settings") ? `<div class="card stack"><h2>🏢 Your companies</h2>
-      <div class="hint">Each client, task, invoice and bill belongs to one of these. Use the switcher at the top to see one company or all. In WhatsApp messages, <b>{company}</b> and <b>{bank}</b> use the client's company.</div>
+      <div class="hint"><b>Type the new name in the boxes below, then click Save companies.</b> Each client, task, invoice and bill belongs to one of these. Use the switcher at the top to see one company or all. In WhatsApp messages, <b>{company}</b> and <b>{bank}</b> use the client's company.</div>
       <div id="bizlist">${bizList().map((b, i) => bizEditor(i, b)).join("")}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-act="addbiz">+ Add company</button><button class="btn primary" data-act="savebiz">Save companies</button></div>
       <div class="hint">Clear a company's name and save to remove it (its records stay, shown under All companies).</div></div>
@@ -1809,6 +1830,8 @@ function checkReminders() {
 document.addEventListener("click", e => {
   const bz = e.target.closest("[data-b]");
   if (bz && bz.parentElement && /_biz$/.test(bz.parentElement.id || "")) { setBizPicked(bz.parentElement.id.replace(/_biz$/, ""), bz.dataset.b); return; }
+  const ab = e.target.closest("[data-assignall],[data-setbiz]");
+  if (ab) { if (ab.dataset.assignall) assignAllBiz(ab.dataset.assignall); else { local.biz = ab.dataset.setbiz; persist(); render(); } return; }
   const fx = e.target.closest("[data-follow],[data-followlater],[data-editbill],[data-paybill],[data-billlater]");
   if (fx) {
     const d = fx.dataset;
