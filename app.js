@@ -187,8 +187,22 @@ function bizPicked(idp) { const el = $("#" + idp + "_biz"); return el ? el.datas
 function setBizPicked(idp, id) { const el = $("#" + idp + "_biz"); if (!el) return; el.dataset.val = id; el.querySelectorAll("[data-b]").forEach(x => x.classList.toggle("on", x.dataset.b === id)); }
 function bizSwitcher(cls) {
   if (!multiBiz()) return "";
-  return `<select class="${cls || "bizsel"}" id="${cls === "bizsel-m" ? "bizSelM" : "bizSel"}" title="Show one company or all"><option value="">🏢 All companies</option>${bizList().map(b => opt(b.id, local.biz || "", b.name)).join("")}${untaggedCount() || local.biz === NOBIZ ? opt(NOBIZ, local.biz || "", "⚠ No company yet (" + untaggedCount() + ")") : ""}${can("settings") ? `<option value="__edit">✏️ Rename / edit companies…</option>` : ""}</select>`;
+  // plain buttons (not a drop-down list) so it works the same in every browser
+  if (cls === "bizsel-m") return `<button data-act="bizmenu" style="border:0;background:none;padding:0;font:inherit;font-weight:700;color:inherit;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;text-align:left">🏢 ${esc(local.biz ? bizViewName() : "All companies")} ▾</button>`;
+  return `<div style="border:1px solid var(--border);border-radius:12px;padding:4px;margin:0 0 12px;background:var(--surface2)">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:4px 8px 2px;display:flex;justify-content:space-between"><span>Company</span>${can("settings") ? `<span data-act="editbiz" style="cursor:pointer;color:var(--accent);text-transform:none;letter-spacing:0" title="Rename / edit companies">✏️ edit</span>` : ""}</div>
+    ${bizButtons("padding:7px 8px;font-size:14px")}</div>`;
 }
+function bizButtons(style) {
+  const row = (id, label, color) => `<button data-setbiz="${esc(id)}" class="${(local.biz || "") === id ? "active" : ""}" style="${style || ""}">${color ? `<span class="bdot" style="--bc:${esc(color)};margin:0;flex:none"></span>` : `<span style="flex:none">${id ? "⚠" : "🏢"}</span>`}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>${(local.biz || "") === id ? `<span style="margin-left:auto">✓</span>` : ""}</button>`;
+  return row("", "All companies") + bizList().map(b => row(b.id, b.short || b.name, b.color || "#64748b")).join("") + (untaggedCount() || local.biz === NOBIZ ? row(NOBIZ, "No company yet (" + untaggedCount() + ")") : "");
+}
+function bizMenu() {
+  modal(`<h2>Which company do you want to see?</h2><div class="stack" style="margin-top:12px;gap:8px">${["", ...bizList().map(b => b.id), ...(untaggedCount() || local.biz === NOBIZ ? [NOBIZ] : [])].map(id => { const b = bizById(id);
+    return `<button class="btn ${(local.biz || "") === id ? "primary" : ""}" data-setbiz="${esc(id)}" style="justify-content:flex-start;min-height:48px;white-space:normal;text-align:left">${b ? `<span class="bdot" style="--bc:${esc(b.color || "#64748b")}"></span>` : id ? "⚠ " : "🏢 "}${esc(b ? b.name : id ? "No company yet (" + untaggedCount() + ")" : "All companies")}</button>`; }).join("")}</div>
+    <div class="mfoot">${can("settings") ? `<button class="btn" data-act="editbiz" style="margin-right:auto">✏️ Rename / edit</button>` : ""}<button class="btn" data-act="mclose">Cancel</button></div>`);
+}
+function editBiz() { closeModal(); go("settings"); const c = $("#bizlist"); if (c) { c.scrollIntoView({ block: "center" }); const f = c.querySelector("[data-bzn]"); if (f) f.focus(); } }
 
 /* payments */
 const paidOf = p => (p.payments || []).reduce((s, x) => s + num(x.amount), 0);
@@ -482,7 +496,6 @@ function render() {
     ${tb("payments", "💰", "Money", 0, ["bills"])}
     ${tb("clients", "👥", "Clients", 0, ["pipeline"])}
   </nav>`;
-  ["#bizSel", "#bizSelM"].forEach(id => { const s = $(id); if (s) s.onchange = () => { if (s.value === "__edit") { go("settings"); const c = $("#bizlist"); if (c) { c.scrollIntoView({ block: "center" }); const f = c.querySelector("[data-bzn]"); if (f) f.focus(); } return; } local.biz = s.value; persist(); render(); window.scrollTo(0, 0); toast(s.value ? "Showing only: " + bizViewName() : "Showing all companies"); }; });
   VIEWS[view]($("#main"));
   document.title = (k.tasksLate ? "(" + k.tasksLate + ") " : "") + local.settings.companyName + " CRM";
   if (openClientId) renderDrawer();
@@ -1831,7 +1844,7 @@ document.addEventListener("click", e => {
   const bz = e.target.closest("[data-b]");
   if (bz && bz.parentElement && /_biz$/.test(bz.parentElement.id || "")) { setBizPicked(bz.parentElement.id.replace(/_biz$/, ""), bz.dataset.b); return; }
   const ab = e.target.closest("[data-assignall],[data-setbiz]");
-  if (ab) { if (ab.dataset.assignall) assignAllBiz(ab.dataset.assignall); else { local.biz = ab.dataset.setbiz; persist(); render(); } return; }
+  if (ab) { if (ab.dataset.assignall) assignAllBiz(ab.dataset.assignall); else { local.biz = ab.dataset.setbiz; persist(); closeModal(); render(); window.scrollTo(0, 0); toast(local.biz ? "Showing only: " + bizViewName() : "Showing all companies"); } return; }
   const fx = e.target.closest("[data-follow],[data-followlater],[data-editbill],[data-paybill],[data-billlater]");
   if (fx) {
     const d = fx.dataset;
@@ -1882,6 +1895,8 @@ document.addEventListener("click", e => {
     case "toggletheme": setTheme(themeNow() === "dark" ? "light" : "dark"); render(); break;
     case "install": if (installPrompt) { installPrompt.prompt(); installPrompt.userChoice.finally(() => { installPrompt = null; render(); }); } break;
     case "addmenu": addMenu(); break;
+    case "bizmenu": bizMenu(); break;
+    case "editbiz": editBiz(); break;
     case "newtask": closeModal(); taskForm(newTask(), true); break;
     case "fromwa": closeModal(); fromWhatsApp(); break;
     case "newclient": closeModal(); clientForm(null, true); break;
